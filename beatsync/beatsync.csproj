@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>14</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="CliFx" Version="3.0.1" />
+      <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
+      <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+      <PackageReference Include="Raylib-cs" Version="8.1.0" />
+      <PackageReference Include="rlImgui-cs" Version="3.2.0" />
+      <PackageReference Include="ZLogger" Version="2.5.10" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Folder Include="CliApp\" />
+      <Folder Include="GuiApp\" />
+      <Folder Include="src\" />
+    </ItemGroup>
+
+</Project>
