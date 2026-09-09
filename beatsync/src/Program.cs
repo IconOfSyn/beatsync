@@ -13,7 +13,7 @@ static class Program
         }
         else
         {
-            CliApp.Run();
+            CliApp.Run(args);
         }
     }
 }

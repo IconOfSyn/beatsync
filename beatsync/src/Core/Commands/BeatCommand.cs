@@ -1,6 +1,6 @@
 namespace beatsync;
 
-public record struct Command
+public record struct BeatCommand
 {
     public CommandType Type;
     public string LibraryPath;
@@ -14,4 +14,6 @@ public enum CommandType : byte
     MountLibrary,
     MountSyncTarget,
     SyncLibrary,
+    CancelSync,
+    SetMaxParallelStreams,
 }

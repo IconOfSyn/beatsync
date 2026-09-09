@@ -7,15 +7,15 @@ namespace beatsync;
 
 public static class CliApp
 {
-    public static void Run()
+    public static void Run(string[]? args = null)
     {
-        var cliBuilder = new CliApplicationBuilder()
+        var app = new CommandLineApplicationBuilder()
             .AddCommandsFromThisAssembly()
-            .UseTypeActivator(commandTypes =>
+            .UseTypeInstantiator(commandDescriptors =>
             {
                 var services = new ServiceCollection();
 
-// Logging system
+                // Logging system
                 services.AddLogging(loggingBuilder =>
                 {
                     // output to  yyyy-MM_*.log, roll by 1MB or changed date
@@ -33,16 +33,23 @@ public static class CliApp
                     });
                 });
 
-// Register services
+                // Register services
 
-// Register commands
-                foreach (var commandType in commandTypes)
-                    services.AddTransient(commandType);
+                // Register commands
+                foreach (var descriptor in commandDescriptors)
+                    services.AddTransient(descriptor.Type);
 
                 return services.BuildServiceProvider();
             })
             .Build();
 
-        cliBuilder.Run();
+        if (args is not null)
+        {
+            app.RunAsync(args).GetAwaiter().GetResult();
+        }
+        else
+        {
+            app.RunAsync().GetAwaiter().GetResult();
+        }
     }
 }

@@ -6,6 +6,7 @@
         <LangVersion>14</LangVersion>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <PublishAot>true</PublishAot>
     </PropertyGroup>
 
     <ItemGroup>
@@ -17,10 +18,5 @@
       <PackageReference Include="ZLogger" Version="2.5.10" />
     </ItemGroup>
 
-    <ItemGroup>
-      <Folder Include="CliApp\" />
-      <Folder Include="GuiApp\" />
-      <Folder Include="src\" />
-    </ItemGroup>
 
 </Project>
