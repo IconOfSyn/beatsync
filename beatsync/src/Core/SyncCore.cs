@@ -6,17 +6,17 @@ public static class SyncCore
 {
     public const int MaxSyncStreams = 20;
     
-    public static async Task<List<SyncJob>> BuildSyncList(BeatState beatState, CancellationToken cancellationToken = default)
+    public static async Task<List<SyncJob>> BuildSyncList(AppState appState, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(beatState.SourcePath) || !Directory.Exists(beatState.SourcePath))
+        if (string.IsNullOrWhiteSpace(appState.SourcePath) || !Directory.Exists(appState.SourcePath))
         {
-            Console.WriteLine($"Source directory does not exist or is invalid: '{beatState.SourcePath}'");
+            Console.WriteLine($"Source directory does not exist or is invalid: '{appState.SourcePath}'");
             return [];
         }
 
-        if (string.IsNullOrWhiteSpace(beatState.TargetPath))
+        if (string.IsNullOrWhiteSpace(appState.TargetPath))
         {
-            Console.WriteLine($"Target directory path is invalid: '{beatState.TargetPath}'");
+            Console.WriteLine($"Target directory path is invalid: '{appState.TargetPath}'");
             return [];
         }
 
@@ -32,21 +32,21 @@ public static class SyncCore
             };
 
             var existingTargetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (Directory.Exists(beatState.TargetPath))
+            if (Directory.Exists(appState.TargetPath))
             {
-                foreach (var targetFile in Directory.EnumerateFiles(beatState.TargetPath, "*", options))
+                foreach (var targetFile in Directory.EnumerateFiles(appState.TargetPath, "*", options))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var relTarget = Path.GetRelativePath(beatState.TargetPath, targetFile);
+                    var relTarget = Path.GetRelativePath(appState.TargetPath, targetFile);
                     existingTargetFiles.Add(relTarget);
                 }
             }
 
-            foreach (var sourceFile in Directory.EnumerateFiles(beatState.SourcePath, "*", options))
+            foreach (var sourceFile in Directory.EnumerateFiles(appState.SourcePath, "*", options))
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var relativePath = Path.GetRelativePath(beatState.SourcePath, sourceFile);
+                var relativePath = Path.GetRelativePath(appState.SourcePath, sourceFile);
 
                 if (!existingTargetFiles.Contains(relativePath))
                 {
@@ -64,11 +64,11 @@ public static class SyncCore
     
     // Lol, SyncAsync...
     public static async Task<SyncResult> SyncMusicAsync(
-        BeatState beatState,
+        AppState appState,
         IProgress<SyncProgressReport>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        int syncStreamCount = beatState.SyncStreamCount;
+        int syncStreamCount = appState.SyncStreamCount;
         if (syncStreamCount <= 0)
         {
             Console.WriteLine("MaxSyncStreams must be greater than 0, setting to 1");
@@ -87,7 +87,7 @@ public static class SyncCore
         List<SyncJob> syncJobList;
         try
         {
-            syncJobList = await BuildSyncList(beatState, cancellationToken);
+            syncJobList = await BuildSyncList(appState, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

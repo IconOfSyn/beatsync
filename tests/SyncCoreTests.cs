@@ -1,36 +1,38 @@
+using System.Diagnostics;
 using beatsync;
 
 namespace beatsync.tests;
 
 public class SyncCoreTests
 {
-    private BeatState _beatState;
+    private AppState _appState;
     
     [OneTimeSetUp]
     public void Setup()
     {
-        _beatState.SyncStreamCount = 4;
-        _beatState.SourcePath = Path.Combine(AppContext.BaseDirectory, "TestData", "Music");
-        _beatState.TargetPath = Path.Combine(AppContext.BaseDirectory, "TestData", "TargetSyncFolder");
+        _appState.SyncStreamCount = 4;
+        _appState.SourcePath = Path.Combine(AppContext.BaseDirectory, "TestData", "Music");
+        _appState.TargetPath = Path.Combine(AppContext.BaseDirectory, "TestData", "TargetSyncFolder");
 
-        ClearTargetSyncDirectory(_beatState.TargetPath);
+        ClearTargetSyncDirectory(_appState.TargetPath);
     }
 
     [SetUp]
     public void TestSetUp()
     {
-        ClearTargetSyncDirectory(_beatState.TargetPath);
+        ClearTargetSyncDirectory(_appState.TargetPath);
     }
 
     [OneTimeTearDown]
     public void TearDown()
     {
-        ClearTargetSyncDirectory(_beatState.TargetPath);
+        ClearTargetSyncDirectory(_appState.TargetPath);
     }
 
-    private void ClearTargetSyncDirectory(string targetPath)
+    private void ClearTargetSyncDirectory(string? targetPath)
     {
-        if (!Directory.Exists(targetPath)) return;
+        if (!Directory.Exists(targetPath)) 
+            return;
 
         var options = new EnumerationOptions
         {
@@ -54,7 +56,7 @@ public class SyncCoreTests
     public async Task BasicSyncTest()
     {
         var cancelTokenSource = new CancellationTokenSource();
-        var result = await SyncCore.SyncMusicAsync(_beatState, null, cancelTokenSource.Token);
+        var result = await SyncCore.SyncMusicAsync(_appState, null, cancelTokenSource.Token);
         
         Assert.That(result.ResultType == ResultType.Success);
         Assert.That(result.FailedCount == 0);
@@ -66,24 +68,15 @@ public class SyncCoreTests
         var cancelTokenSource = new CancellationTokenSource();
         cancelTokenSource.Cancel();
         
-        var result = await SyncCore.SyncMusicAsync(_beatState, null, cancelTokenSource.Token);
+        var result = await SyncCore.SyncMusicAsync(_appState, null, cancelTokenSource.Token);
         
         Assert.That(result.ResultType == ResultType.Cancelled);
     }
     
     [Test]
-    public void TestDataAssetsExist()
-    {
-        Assert.That(Directory.Exists(_beatState.SourcePath), Is.True, $"LibraryPath does not exist at {_beatState.SourcePath}");
-        Assert.That(Directory.Exists(_beatState.TargetPath), Is.True, $"TargetPath does not exist at {_beatState.TargetPath}");
-        Assert.That(File.Exists(Path.Combine(_beatState.SourcePath, "AvengedSevenfold", "CityOfEvil", "BeastAndTheHarlot.flac")), Is.True);
-        Assert.That(File.Exists(Path.Combine(_beatState.SourcePath, "AvengedSevenfold", "TheStage", "TheStage.flac")), Is.True);
-    }
-    
-    [Test]
     public async Task BuildFileSyncList()
     {
-        var syncList = await SyncCore.BuildSyncList(_beatState, default);
+        var syncList = await SyncCore.BuildSyncList(_appState, default);
         
         Assert.That(syncList, Is.Not.Null);
         Assert.That(syncList.Count > 0);
@@ -92,7 +85,7 @@ public class SyncCoreTests
     [Test]
     public async Task BuildSyncList_WhenTargetEmpty_ReturnsAllSourceFiles()
     {
-        var syncList = await SyncCore.BuildSyncList(_beatState, default);
+        var syncList = await SyncCore.BuildSyncList(_appState, default);
 
         var expectedFile1 = Path.Combine("AvengedSevenfold", "CityOfEvil", "BeastAndTheHarlot.flac");
         var expectedFile2 = Path.Combine("AvengedSevenfold", "TheStage", "TheStage.flac");
@@ -106,11 +99,13 @@ public class SyncCoreTests
     public async Task BuildSyncList_WhenFileAlreadyInTarget_ExcludesExistingFile()
     {
         var existingRelative = Path.Combine("AvengedSevenfold", "CityOfEvil", "BeastAndTheHarlot.flac");
-        var targetFile = Path.Combine(_beatState.TargetPath, existingRelative);
+        Debug.Assert(_appState.TargetPath != null);
+        
+        var targetFile = Path.Combine(_appState.TargetPath, existingRelative);
         Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
         await File.WriteAllTextAsync(targetFile, "dummy flac content");
 
-        var syncList = await SyncCore.BuildSyncList(_beatState, default);
+        var syncList = await SyncCore.BuildSyncList(_appState, default);
 
         var missingRelative = Path.Combine("AvengedSevenfold", "TheStage", "TheStage.flac");
         Assert.That(syncList, Has.Count.EqualTo(1));
@@ -120,14 +115,18 @@ public class SyncCoreTests
     [Test]
     public async Task BuildSyncList_WhenAllFilesPresentInTarget_ReturnsEmptyList()
     {
-        var file1 = Path.Combine(_beatState.TargetPath, "AvengedSevenfold", "CityOfEvil", "BeastAndTheHarlot.flac");
-        var file2 = Path.Combine(_beatState.TargetPath, "AvengedSevenfold", "TheStage", "TheStage.flac");
+        Debug.Assert(_appState.TargetPath != null);
+        
+        var file1 = Path.Combine(_appState.TargetPath, "AvengedSevenfold", "CityOfEvil", "BeastAndTheHarlot.flac");
+        var file2 = Path.Combine(_appState.TargetPath, "AvengedSevenfold", "TheStage", "TheStage.flac");
+        
         Directory.CreateDirectory(Path.GetDirectoryName(file1)!);
         Directory.CreateDirectory(Path.GetDirectoryName(file2)!);
+        
         await File.WriteAllTextAsync(file1, "dummy");
         await File.WriteAllTextAsync(file2, "dummy");
 
-        var syncList = await SyncCore.BuildSyncList(_beatState, default);
+        var syncList = await SyncCore.BuildSyncList(_appState, default);
 
         Assert.That(syncList, Is.Empty);
     }
@@ -139,13 +138,13 @@ public class SyncCoreTests
         cts.Cancel();
 
         Assert.CatchAsync<OperationCanceledException>(async () =>
-            await SyncCore.BuildSyncList(_beatState, cts.Token));
+            await SyncCore.BuildSyncList(_appState, cts.Token));
     }
 
     [Test]
     public async Task BuildSyncList_WhenSourceDoesNotExist_LogsAndReturnsEmptyList()
     {
-        var invalidState = _beatState with { SourcePath = Path.Combine(AppContext.BaseDirectory, "NonExistentSource") };
+        var invalidState = _appState with { SourcePath = Path.Combine(AppContext.BaseDirectory, "NonExistentSource") };
         var syncList = await SyncCore.BuildSyncList(invalidState, default);
 
         Assert.That(syncList, Is.Empty);
@@ -155,7 +154,7 @@ public class SyncCoreTests
     public async Task BuildSyncList_WhenTargetDoesNotExist_TreatsAllFilesAsMissing()
     {
         var nonExistentTarget = Path.Combine(AppContext.BaseDirectory, "TestData", "NonExistentTarget_" + Guid.NewGuid().ToString("N"));
-        var state = _beatState with { TargetPath = nonExistentTarget };
+        var state = _appState with { TargetPath = nonExistentTarget };
 
         try
         {

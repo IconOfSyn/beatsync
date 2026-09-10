@@ -5,7 +5,7 @@ namespace beatsync;
 
 public static class FolderDialog
 {
-    public static string? PickFolder(string prompt = "Select Directory", string? initialPath = null)
+    public static string PickFolder(string prompt = "Select Directory", string? initialPath = null)
     {
         try
         {
@@ -27,10 +27,10 @@ public static class FolderDialog
             Console.WriteLine($"Error showing native folder dialog: {ex.Message}");
         }
 
-        return null;
+        return "";
     }
 
-    private static string? PickFolderMac(string prompt, string? initialPath)
+    private static string PickFolderMac(string prompt, string? initialPath)
     {
         string escapedPrompt = prompt.Replace("\"", "\\\"");
         string script;
@@ -56,7 +56,8 @@ public static class FolderDialog
         psi.ArgumentList.Add(script);
 
         using var process = Process.Start(psi);
-        if (process is null) return null;
+        if (process is null) 
+            return "";
 
         string output = process.StandardOutput.ReadToEnd().Trim();
         process.WaitForExit();
@@ -66,10 +67,10 @@ public static class FolderDialog
             return output.TrimEnd('/', '\\');
         }
 
-        return null;
+        return "";
     }
 
-    private static string? PickFolderWindows(string prompt, string? initialPath)
+    private static string PickFolderWindows(string prompt, string? initialPath)
     {
         string initDirArg = !string.IsNullOrWhiteSpace(initialPath) && Directory.Exists(initialPath)
             ? $"$f.SelectedPath = '{Path.GetFullPath(initialPath).Replace("'", "''")}';"
@@ -90,7 +91,8 @@ public static class FolderDialog
         psi.ArgumentList.Add(command);
 
         using var process = Process.Start(psi);
-        if (process is null) return null;
+        if (process is null)
+            return "";
 
         string output = process.StandardOutput.ReadToEnd().Trim();
         process.WaitForExit();
@@ -100,10 +102,10 @@ public static class FolderDialog
             return output;
         }
 
-        return null;
+        return "";
     }
 
-    private static string? PickFolderLinux(string prompt, string? initialPath)
+    private static string PickFolderLinux(string prompt, string? initialPath)
     {
         var psi = new ProcessStartInfo
         {
@@ -123,7 +125,8 @@ public static class FolderDialog
         }
 
         using var process = Process.Start(psi);
-        if (process is null) return null;
+        if (process is null) 
+            return "";
 
         string output = process.StandardOutput.ReadToEnd().Trim();
         process.WaitForExit();
@@ -133,6 +136,6 @@ public static class FolderDialog
             return output.TrimEnd('/', '\\');
         }
 
-        return null;
+        return "";
     }
 }

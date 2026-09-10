@@ -2,13 +2,13 @@ namespace beatsync;
 
 public class BeatCommandHandler
 {
-    public BeatState BeatState = new();
+    public AppState AppState = new();
     public  IProgress<SyncProgressReport> SyncProgress = new Progress<SyncProgressReport>();
 
     private readonly Queue<BeatCommand> _commandQueue = new();
 
 
-    private CancellationTokenSource _syncCancelTokenSource;
+    private CancellationTokenSource? _syncCancelTokenSource;
     private bool _isSyncInProgress;
 
 
@@ -41,18 +41,18 @@ public class BeatCommandHandler
 
     private void HandleMountLibrary(BeatCommand command)
     {
-        BeatState.SourcePath = command.LibraryPath;
+        AppState.SourcePath = command.LibraryPath;
     }
 
     private void HandleMountSyncTarget(BeatCommand command)
     {
-        BeatState.TargetPath = command.LibraryPath;
+        AppState.TargetPath = command.LibraryPath;
     }
 
     private async Task HandleSyncLibrary(BeatCommand command)
     {
         _syncCancelTokenSource = new CancellationTokenSource();
-        await SyncCore.SyncMusicAsync(BeatState, SyncProgress, _syncCancelTokenSource.Token);
+        await SyncCore.SyncMusicAsync(AppState, SyncProgress, _syncCancelTokenSource.Token);
     }
 
     private void HandleCancelSync(BeatCommand command)

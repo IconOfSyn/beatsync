@@ -1,5 +1,4 @@
-using System.Reflection;
-using System.Runtime.InteropServices;
+using System.Numerics;
 using ImGuiNET;
 using Raylib_cs;
 using rlImGui_cs;
@@ -8,10 +7,16 @@ namespace beatsync;
 
 public static class GuiApp
 {
-    private static string _sourcePath = "";
-    private static string _targetPath = "";
+    private const int MaxDirectoryLength = 1024;
+    
     private static bool _isBrowsingSource;
     private static bool _isBrowsingTarget;
+    
+    private static AppState _appState = new();
+    
+    private static Vector4 _goodColor = new Vector4(0.4f, 0.8f, 0.4f, 1f);
+    private static Vector4 _warningColor = new Vector4(0.9f, 0.7f, 0.2f, 1f);
+    private static Vector4 _errorColor = new Vector4(0.9f, 0.4f, 0.4f, 1f);
 
     public static void Run()
     {
@@ -23,11 +28,9 @@ public static class GuiApp
         while (!Raylib.WindowShouldClose())
         {
             Raylib.BeginDrawing();
-            Raylib.ClearBackground(new Color(0, 0, 0, 0));
+            Raylib.ClearBackground(new Color(0, 0, 0, 1));
 
             rlImGui.Begin();			// starts the ImGui content mode. Make all ImGui calls after this
-
-            ImGui.DockSpaceOverViewport(0, ImGui.GetMainViewport(), ImGuiDockNodeFlags.PassthruCentralNode | ImGuiDockNodeFlags.AutoHideTabBar);
 
             if (ImGui.BeginMainMenuBar()) {
                 if (ImGui.BeginMenu("File")) {
@@ -42,12 +45,28 @@ public static class GuiApp
                 ImGui.EndMainMenuBar();
             }
 
-            bool laneCheckWindowCreated = ImGui.Begin("beatsync", ImGuiWindowFlags.AlwaysAutoResize);
-            if (laneCheckWindowCreated)
+            var viewport = ImGui.GetMainViewport();
+            ImGui.SetNextWindowPos(viewport.WorkPos);
+            ImGui.SetNextWindowSize(viewport.WorkSize);
+
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0.0f);
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0.0f);
+
+            ImGuiWindowFlags windowFlags = ImGuiWindowFlags.NoTitleBar
+                | ImGuiWindowFlags.NoResize
+                | ImGuiWindowFlags.NoMove
+                | ImGuiWindowFlags.NoCollapse
+                | ImGuiWindowFlags.NoBringToFrontOnFocus
+                | ImGuiWindowFlags.NoNavFocus;
+
+            bool isWindowOpen = ImGui.Begin("beatsync", windowFlags);
+            ImGui.PopStyleVar(2);
+
+            if (isWindowOpen)
             {
                 ImGui.Text("Source Directory:");
                 ImGui.SetNextItemWidth(450);
-                ImGui.InputText("##SourcePath", ref _sourcePath, 1024);
+                ImGui.InputText("##SourcePath", ref _appState.SourcePath, 1024);
                 ImGui.SameLine();
                 if (_isBrowsingSource)
                 {
@@ -60,34 +79,24 @@ public static class GuiApp
                     if (ImGui.Button("Browse...##Source"))
                     {
                         _isBrowsingSource = true;
-                        string current = _sourcePath;
-                        Task.Run(() =>
+                        
+                        PickDirectoryAsync(_appState.SourcePath, "Select Source Directory", (selected) =>
                         {
-                            try
-                            {
-                                string? selected = FolderDialog.PickFolder("Select Source Directory", current);
-                                if (!string.IsNullOrWhiteSpace(selected))
-                                {
-                                    _sourcePath = selected;
-                                }
-                            }
-                            finally
-                            {
-                                _isBrowsingSource = false;
-                            }
+                            _appState.SourcePath = selected;
+                            _isBrowsingSource = false;
                         });
                     }
                 }
 
-                if (!string.IsNullOrWhiteSpace(_sourcePath))
+                if (!string.IsNullOrWhiteSpace(_appState.SourcePath))
                 {
-                    if (Directory.Exists(_sourcePath))
+                    if (Directory.Exists(_appState.SourcePath))
                     {
-                        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.8f, 0.4f, 1f), "✓ Directory exists");
+                        ImGui.TextColored(_goodColor, "✓ Directory exists");
                     }
                     else
                     {
-                        ImGui.TextColored(new System.Numerics.Vector4(0.9f, 0.4f, 0.4f, 1f), "✗ Directory not found");
+                        ImGui.TextColored(_errorColor, "✗ Directory not found");
                     }
                 }
 
@@ -97,8 +106,9 @@ public static class GuiApp
 
                 ImGui.Text("Target Directory:");
                 ImGui.SetNextItemWidth(450);
-                ImGui.InputText("##TargetPath", ref _targetPath, 1024);
+                ImGui.InputText("##TargetPath", ref _appState.TargetPath, MaxDirectoryLength);
                 ImGui.SameLine();
+                
                 if (_isBrowsingTarget)
                 {
                     ImGui.BeginDisabled();
@@ -110,34 +120,24 @@ public static class GuiApp
                     if (ImGui.Button("Browse...##Target"))
                     {
                         _isBrowsingTarget = true;
-                        string current = _targetPath;
-                        Task.Run(() =>
+                        
+                        PickDirectoryAsync( _appState.TargetPath, "Select Target Directory", (selected) =>
                         {
-                            try
-                            {
-                                string? selected = FolderDialog.PickFolder("Select Target Directory", current);
-                                if (!string.IsNullOrWhiteSpace(selected))
-                                {
-                                    _targetPath = selected;
-                                }
-                            }
-                            finally
-                            {
-                                _isBrowsingTarget = false;
-                            }
+                            _appState.TargetPath = selected;
+                            _isBrowsingTarget = false;
                         });
                     }
                 }
 
-                if (!string.IsNullOrWhiteSpace(_targetPath))
+                if (!string.IsNullOrWhiteSpace(_appState.TargetPath))
                 {
-                    if (Directory.Exists(_targetPath))
+                    if (Directory.Exists(_appState.TargetPath))
                     {
-                        ImGui.TextColored(new System.Numerics.Vector4(0.4f, 0.8f, 0.4f, 1f), "✓ Directory exists");
+                        ImGui.TextColored(_goodColor, "✓ Directory exists");
                     }
                     else
                     {
-                        ImGui.TextColored(new System.Numerics.Vector4(0.9f, 0.7f, 0.2f, 1f), "! Directory will be created upon sync");
+                        ImGui.TextColored(_warningColor, "! Directory will be created upon sync");
                     }
                 }
             }
@@ -150,5 +150,22 @@ public static class GuiApp
 
         rlImGui.Shutdown();		// cleans up ImGui
         Raylib.CloseWindow();
+    }
+
+    private static void PickDirectoryAsync(string initialPath, string prompt, Action<string?> onComplete)
+    {
+        Task.Run(() =>
+        {
+            string? selected = null;
+            try
+            {
+                selected = FolderDialog.PickFolder(prompt, initialPath);
+               
+            }
+            finally
+            {
+                onComplete?.Invoke(selected);
+            }
+        });
     }
 }
