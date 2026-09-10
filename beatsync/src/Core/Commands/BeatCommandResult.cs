@@ -8,4 +8,5 @@ public record struct BeatCommandResult
     public string? ErrorMessage;
     public List<SyncJob>? DiffList;
     public SyncResult? SyncResult;
+    public bool IsTimedOut;
 }

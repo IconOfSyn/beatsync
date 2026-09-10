@@ -12,7 +12,8 @@ public class BeatCommandHandler
     private readonly List<Task<BeatCommandResult>> _pendingTasks = new();
 
     private uint _nextCommandId = 1;
-    private CancellationTokenSource? _syncCancelTokenSource;
+    private CancellationTokenSource? _activeOpCancelTokenSource;
+    private bool _isManualCancel;
 
     public uint Submit(BeatCommand command)
     {
@@ -55,8 +56,8 @@ public class BeatCommandHandler
                 case CommandType.SyncLibrary:
                     HandleSyncLibrary(command);
                     break;
-                case CommandType.CancelSync:
-                    HandleCancelSync(command);
+                case CommandType.Cancel:
+                    HandleCancel(command);
                     break;
                 case CommandType.SetMaxParallelStreams:
                     HandleSetMaxParallelStreams(command);
@@ -78,19 +79,34 @@ public class BeatCommandHandler
 
     private void HandleCalculateDiff(BeatCommand command)
     {
+        _activeOpCancelTokenSource?.Cancel();
+        _activeOpCancelTokenSource = new CancellationTokenSource();
+        _isManualCancel = false;
+
         var cmdId = command.Id;
+        var timeoutMs = command.TimeoutMs;
+        var cts = _activeOpCancelTokenSource;
+
+        if (timeoutMs > 0)
+        {
+            cts.CancelAfter(timeoutMs);
+        }
 
         var task = Task.Run(async () =>
         {
-            var diffResult = await SyncCore.BuildSyncList(AppState);
+            var diffResult = await SyncCore.BuildSyncList(AppState, cts.Token);
+            bool isTimedOut = timeoutMs > 0 && cts.IsCancellationRequested && !_isManualCancel;
 
             return new BeatCommandResult
             {
                 CommandId = cmdId,
                 CommandType = CommandType.CalculateDiff,
                 ResultType = diffResult.ResultType,
-                ErrorMessage = diffResult.ErrorMessage,
+                ErrorMessage = isTimedOut
+                    ? "Auto-scan timed out (>100ms). Click 'Calculate Diff' to perform full scan."
+                    : diffResult.ErrorMessage,
                 DiffList = diffResult.Jobs,
+                IsTimedOut = isTimedOut,
             };
         });
 
@@ -99,18 +115,34 @@ public class BeatCommandHandler
 
     private void HandleSyncLibrary(BeatCommand command)
     {
-        _syncCancelTokenSource = new CancellationTokenSource();
+        // Early out if the diff result is not valid
+        if (!IsValid(command.DiffResult))
+        {
+            _resultQueue.Enqueue(new BeatCommandResult
+            {
+                CommandId =  command.Id,
+                CommandType = CommandType.SyncLibrary,
+                ResultType = ResultType.Error,
+                ErrorMessage = "Track diff is not valid"
+            });
+
+            return;
+        }
+        
+        
+        _activeOpCancelTokenSource?.Cancel();
+        _activeOpCancelTokenSource = new CancellationTokenSource();
+        _isManualCancel = false;
         LatestProgress = default;
 
         var cmdId = command.Id;
-        var isDryRun = command.IsDryRun;
-        var cancelToken = _syncCancelTokenSource.Token;
+        var cancelToken = _activeOpCancelTokenSource.Token;
 
         var progress = new Progress<SyncProgressReport>(report => LatestProgress = report);
 
         var task = Task.Run(async () =>
         {
-            var result = await SyncCore.SyncMusicAsync(AppState, isDryRun, progress, cancelToken);
+            var result = await SyncCore.SyncMusicAsync(AppState, command.DiffResult, progress, cancelToken);
 
             return new BeatCommandResult
             {
@@ -124,13 +156,20 @@ public class BeatCommandHandler
         _pendingTasks.Add(task);
     }
 
-    private void HandleCancelSync(BeatCommand command)
+    private void HandleCancel(BeatCommand command)
     {
-        _syncCancelTokenSource?.Cancel();
+        _isManualCancel = true;
+        _activeOpCancelTokenSource?.Cancel();
     }
 
     private void HandleSetMaxParallelStreams(BeatCommand command)
     {
         AppState.SyncStreamCount = command.StreamCount;
+    }
+
+    private bool IsValid(DiffResult diffResult)
+    {
+        return diffResult.ResultType == ResultType.Success && 
+               diffResult.Jobs?.Count > 0;
     }
 }

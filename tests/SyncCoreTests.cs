@@ -11,6 +11,7 @@ public class SyncCoreTests
     public void Setup()
     {
         _appState.SyncStreamCount = 4;
+        _appState.IsDryRun = true;
         _appState.SourcePath = Path.Combine(AppContext.BaseDirectory, "TestData", "Music");
         _appState.TargetPath = Path.Combine(AppContext.BaseDirectory, "TestData", "TargetSyncFolder");
 
@@ -56,17 +57,22 @@ public class SyncCoreTests
     public async Task BasicSyncTest()
     {
         var cancelTokenSource = new CancellationTokenSource();
-        var result = await SyncCore.SyncMusicAsync(_appState, isDryRun: true, cancellationToken: cancelTokenSource.Token);
         
-        Assert.That(result.ResultType == ResultType.Success);
-        Assert.That(result.FailedCount == 0);
+        var diffResult = await SyncCore.BuildSyncList(_appState, cancelTokenSource.Token);
+        var syncResult = await SyncCore.SyncMusicAsync(_appState, diffResult, null, cancelTokenSource.Token);
+        
+        Assert.That(syncResult.ResultType == ResultType.Success);
+        Assert.That(syncResult.FailedCount == 0);
     }
 
     [Test]
     public async Task RealSync_CopiesFilesToTarget()
     {
         var cancelTokenSource = new CancellationTokenSource();
-        var result = await SyncCore.SyncMusicAsync(_appState, isDryRun: false, cancellationToken: cancelTokenSource.Token);
+        
+        _appState.IsDryRun = false;
+        var diffResult = await SyncCore.BuildSyncList(_appState, cancelTokenSource.Token);
+        var result = await SyncCore.SyncMusicAsync(_appState, diffResult, null, cancelTokenSource.Token);
 
         Assert.That(result.ResultType, Is.EqualTo(ResultType.Success));
         Assert.That(result.SuccessCount, Is.EqualTo(2));
@@ -88,7 +94,9 @@ public class SyncCoreTests
         var cancelTokenSource = new CancellationTokenSource();
         cancelTokenSource.Cancel();
 
-        var result = await SyncCore.SyncMusicAsync(_appState, isDryRun: false, cancellationToken: cancelTokenSource.Token);
+        _appState.IsDryRun = false;
+        var diffResult = await SyncCore.BuildSyncList(_appState, cancelTokenSource.Token);
+        var result = await SyncCore.SyncMusicAsync(_appState, diffResult, null, cancelTokenSource.Token);
 
         Assert.That(result.ResultType, Is.EqualTo(ResultType.Cancelled));
 
@@ -103,9 +111,10 @@ public class SyncCoreTests
     public async Task CancelWorksTest()
     {
         var cancelTokenSource = new CancellationTokenSource();
-        cancelTokenSource.Cancel();
         
-        var result = await SyncCore.SyncMusicAsync(_appState, isDryRun: true, cancellationToken: cancelTokenSource.Token);
+        var diffResult = await SyncCore.BuildSyncList(_appState, cancelTokenSource.Token);
+        await cancelTokenSource.CancelAsync();
+        var result = await SyncCore.SyncMusicAsync(_appState, diffResult, null, cancelTokenSource.Token);
         
         Assert.That(result.ResultType == ResultType.Cancelled);
     }
@@ -213,5 +222,49 @@ public class SyncCoreTests
                 Directory.Delete(nonExistentTarget, true);
             }
         }
+    }
+
+    [Test]
+    public async Task BuildSyncList_WhenTimedOut_CancelsGracefully()
+    {
+        using var cts = new CancellationTokenSource(1);
+        await Task.Delay(10); // Ensure CTS has elapsed
+
+        var diffResult = await SyncCore.BuildSyncList(_appState, cts.Token);
+        Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Cancelled));
+    }
+
+    [Test]
+    public async Task BeatCommandHandler_AutoDiff_TimesOutQuickly()
+    {
+        // Use the project directory which contains thousands of files in obj/bin/.git to ensure scan takes >1ms
+        var largeDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+        var handler = new BeatCommandHandler { AppState = _appState with { SourcePath = largeDir } };
+        handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 1 });
+        handler.ProcessCommands(); // Dispatch into pending tasks
+
+        // Allow timeout to fire and background task to complete
+        await Task.Delay(100);
+        handler.ProcessCommands(); // Collect completed result
+
+        Assert.That(handler.TryDequeueResult(out var result), Is.True);
+        Assert.That(result.CommandType, Is.EqualTo(CommandType.CalculateDiff));
+        Assert.That(result.ResultType, Is.EqualTo(ResultType.Cancelled));
+        Assert.That(result.IsTimedOut, Is.True);
+    }
+
+    [Test]
+    public async Task BeatCommandHandler_CancelCommand_CancelsDiff()
+    {
+        var handler = new BeatCommandHandler { AppState = _appState };
+        handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 0 });
+        handler.Submit(new BeatCommand { Type = CommandType.Cancel });
+
+        handler.ProcessCommands();
+        await Task.Delay(50);
+        handler.ProcessCommands();
+
+        Assert.That(handler.TryDequeueResult(out var result), Is.True);
+        Assert.That(result.ResultType, Is.EqualTo(ResultType.Cancelled));
     }
 }

@@ -7,6 +7,8 @@ public record struct BeatCommand
     public string? Path;
     public bool IsDryRun;
     public int StreamCount;
+    public int TimeoutMs;
+    public DiffResult DiffResult;
 }
 
 public enum CommandType : byte
@@ -17,6 +19,6 @@ public enum CommandType : byte
     MountTargetDirectory,
     CalculateDiff,
     SyncLibrary,
-    CancelSync,
+    Cancel,
     SetMaxParallelStreams,
 }

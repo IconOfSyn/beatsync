@@ -14,6 +14,9 @@ public static class GuiApp
     private static readonly Vector4 _errorColor = new Vector4(0.9f, 0.4f, 0.4f, 1f);
 
     
+    private static readonly string[] _spinnerFrames = [".  ", ".. ", "..."];
+    private const float AnimationSpeed = 3f;
+    
     // Command handler
     private static BeatCommandHandler _handler = new();
     
@@ -23,16 +26,14 @@ public static class GuiApp
     private static List<SyncJob>? _syncDiffList;
     private static GuiStateType _guiStateType = GuiStateType.Idle;
     private static SyncProgressReport _lastSyncProgressReport;
-    private static bool _isDryRun;
     private static string? _lastErrorMessage;
     private static string? _lastInfoMessage;
     private static string _tempSourcePath = "";
     private static string _tempTargetPath = "";
+    private static bool _diffTimedOut;
     
     public static void Run(bool isDryRun)
     {
-        _isDryRun = isDryRun;
-        
         Raylib.SetConfigFlags(ConfigFlags.HighDpiWindow | ConfigFlags.VSyncHint | ConfigFlags.ResizableWindow);
         Raylib.InitWindow(850, 480, "Beat Sync");
 
@@ -41,8 +42,13 @@ public static class GuiApp
         var saveFile = Path.Combine(GetOrCreateWritableDirectory(), "SaveState.bsyn");
 
         _handler.AppState = LoadAppState(saveFile);
+        _handler.AppState.IsDryRun = isDryRun;
 
-        _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
+        if (_handler.AppState.HasValidPaths())
+        {
+            _guiStateType = GuiStateType.CalculatingDiff;
+            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
+        }
 
         _tempSourcePath = _handler.AppState.SourcePath;
         _tempTargetPath = _handler.AppState.TargetPath;
@@ -142,7 +148,8 @@ public static class GuiApp
                                 Path = selected,
                             });
                             
-                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
+                            _guiStateType = GuiStateType.CalculatingDiff;
+                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
                         });
                     }
                 }
@@ -197,7 +204,8 @@ public static class GuiApp
                                 Path = selected,
                             });
                                 
-                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
+                            _guiStateType = GuiStateType.CalculatingDiff;
+                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
                         });
                     }
                 }
@@ -222,7 +230,7 @@ public static class GuiApp
                 {
                     if (ImGui.Button("Cancel"))
                     {
-                        _handler.Submit(new BeatCommand { Type = CommandType.CancelSync });
+                        _handler.Submit(new BeatCommand { Type = CommandType.Cancel });
                     }
 
                     float progressFraction = _lastSyncProgressReport.TotalBytes > 0
@@ -237,9 +245,20 @@ public static class GuiApp
                     ImGui.ProgressBar(progressFraction, new Vector2(ImGui.GetWindowViewport().WorkSize.X, 30f));
                     ImGui.Text($"{_lastSyncProgressReport.CurrentPath}");
                 }
+                else if (_guiStateType == GuiStateType.CalculatingDiff)
+                {
+                    if (ImGui.Button("Cancel##Diff"))
+                    {
+                        _handler.Submit(new BeatCommand { Type = CommandType.Cancel });
+                    }
+                    ImGui.SameLine();
+
+                    int frameIndex = (int)(Raylib.GetTime() * AnimationSpeed) % _spinnerFrames.Length;
+                    ImGui.TextColored(_warningColor, $"Scanning library for changes{_spinnerFrames[frameIndex]}");
+                }
                 else
                 {
-                    ImGui.Checkbox("Dry Run", ref _isDryRun);
+                    ImGui.Checkbox("Dry Run", ref _handler.AppState.IsDryRun);
                     ImGui.SameLine();
 
                     if (_handler.AppState.HasValidPaths())
@@ -247,7 +266,8 @@ public static class GuiApp
                         if (ImGui.Button("Calculate Diff"))
                         {
                             _guiStateType = GuiStateType.CalculatingDiff;
-                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
+                            _diffTimedOut = false;
+                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 0 });
                         }
                     }
 
@@ -265,9 +285,14 @@ public static class GuiApp
                             _handler.Submit(new BeatCommand
                             {
                                 Type = CommandType.SyncLibrary,
-                                IsDryRun = _isDryRun,
                             });
                         }
+                    }
+
+                    if (_diffTimedOut)
+                    {
+                        ImGui.Spacing();
+                        ImGui.TextColored(_warningColor, "! Large library detected (auto-scan timed out >100ms). Click 'Calculate Diff' to perform full scan.");
                     }
                 }
             }
@@ -292,9 +317,26 @@ public static class GuiApp
             {
                 case CommandType.CalculateDiff:
                     _guiStateType = GuiStateType.Idle;
-                    _syncDiffList = result.DiffList;
-                    _lastInfoMessage = $"Sync Track Count: {result.DiffList?.Count}";
-                    _lastErrorMessage = null;
+                    if (result.ResultType == ResultType.Success)
+                    {
+                        _syncDiffList = result.DiffList;
+                        _diffTimedOut = false;
+                        _lastInfoMessage = $"Sync Track Count: {result.DiffList?.Count}";
+                        _lastErrorMessage = null;
+                    }
+                    else if (result.IsTimedOut)
+                    {
+                        _diffTimedOut = true;
+                        _syncDiffList = null;
+                        _lastInfoMessage = null;
+                        _lastErrorMessage = null;
+                    }
+                    else if (result.ResultType == ResultType.Cancelled)
+                    {
+                        _diffTimedOut = false;
+                        _lastInfoMessage = "Diff scan cancelled.";
+                        _lastErrorMessage = null;
+                    }
                     break;
                     
                 case CommandType.SyncLibrary:
@@ -304,8 +346,9 @@ public static class GuiApp
                     _lastErrorMessage = null;
                     if (result.ResultType == ResultType.Success)
                     {
-                        // Refresh diff automatically so synced tracks disappear from the list
-                        _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
+                        // Refresh diff automatically with 100ms timeout
+                        _guiStateType = GuiStateType.CalculatingDiff;
+                        _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
                     }
                     break;
             }

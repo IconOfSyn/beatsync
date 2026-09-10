@@ -5,6 +5,7 @@ namespace beatsync;
 public static class SyncCore
 {
     public const int MaxSyncStreams = 20;
+    private const int DryRunJobDelayInMilliseconds = 80;
     
     public static async Task<DiffResult> BuildSyncList(AppState appState, CancellationToken cancellationToken = default)
     {
@@ -125,7 +126,7 @@ public static class SyncCore
     // Lol, SyncAsync...
     public static async Task<SyncResult> SyncMusicAsync(
         AppState appState,
-        bool isDryRun,
+        DiffResult diffResult,
         IProgress<SyncProgressReport>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -144,21 +145,10 @@ public static class SyncCore
 
         
         var stopwatch = Stopwatch.StartNew();
-        
-        var diffResult = await BuildSyncList(appState, cancellationToken);
-        if (diffResult.ResultType != ResultType.Success)
-        {
-            stopwatch.Stop();
-            return new SyncResult
-            {
-                ResultType = diffResult.ResultType,
-                Files = [],
-                Elapsed = stopwatch.Elapsed
-            };
-        }
 
         var syncJobList = diffResult.Jobs;
         var fileResults = new FileSyncResult[syncJobList.Count];
+        
         int completedCount = 0;
         long totalBytesToTransfer = syncJobList.Sum(j => j.FileSizeBytes);
         long totalBytesTransferred = 0;
@@ -189,11 +179,11 @@ public static class SyncCore
 
                 var startTime = DateTimeOffset.UtcNow;
 
-                if (isDryRun)
+                if (appState.IsDryRun)
                 {
                     try
                     {
-                        await Task.Delay(80, ct);
+                        await Task.Delay(DryRunJobDelayInMilliseconds, ct);
                     }
                     catch (OperationCanceledException)
                     {
