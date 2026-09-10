@@ -7,9 +7,11 @@ static class Program
     public static void Main(string[] args)
     {
         bool isGui = Array.Exists(args, a => string.Equals(a, "--gui", StringComparison.OrdinalIgnoreCase));
+        
         if (isGui)
         {
-            GuiApp.Run();
+            bool isDryRun = Array.Exists(args, a => string.Equals(a, "--noop", StringComparison.OrdinalIgnoreCase));
+            GuiApp.Run(isDryRun);
         }
         else
         {

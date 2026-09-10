@@ -9,6 +9,9 @@ public record struct AppState()
     public string SourcePath = "";
     public string TargetPath = "";
     public int SyncStreamCount = DefaultSyncStreamCount;
+    
+    
+    public bool HasValidPaths() => !string.IsNullOrWhiteSpace(SourcePath) && !string.IsNullOrWhiteSpace(TargetPath);
 
     public static byte[] Serialize(AppState state)
     {

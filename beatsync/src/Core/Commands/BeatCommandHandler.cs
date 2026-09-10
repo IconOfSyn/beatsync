@@ -52,7 +52,8 @@ public class BeatCommandHandler
     private async Task HandleSyncLibrary(BeatCommand command)
     {
         _syncCancelTokenSource = new CancellationTokenSource();
-        await SyncCore.SyncMusicAsync(AppState, SyncProgress, _syncCancelTokenSource.Token);
+        await SyncCore.SyncMusicAsync(AppState, command.IsDryRun, SyncProgress, _syncCancelTokenSource.Token);
+        
     }
 
     private void HandleCancelSync(BeatCommand command)

@@ -1,7 +1,8 @@
 namespace beatsync;
 
-public enum SyncStatus : byte
+public enum FileSyncStatus : byte
 {
+    None,
     Success,
     Failed,
     Skipped,
@@ -12,7 +13,7 @@ public readonly record struct FileSyncResult(
     string Path,
     DateTimeOffset Started,
     DateTimeOffset Completed,
-    SyncStatus Status = SyncStatus.Success,
+    FileSyncStatus Status = FileSyncStatus.None,
     string? ErrorMessage = null
 )
 {
@@ -26,10 +27,10 @@ public sealed record SyncResult
     public TimeSpan Elapsed { get; init; }
 
     public int TotalCount => Files.Count;
-    public int SuccessCount => Files.Count(f => f.Status == SyncStatus.Success);
-    public int FailedCount => Files.Count(f => f.Status == SyncStatus.Failed);
-    public int SkippedCount => Files.Count(f => f.Status == SyncStatus.Skipped);
-    public int CancelledCount => Files.Count(f => f.Status == SyncStatus.Cancelled);
+    public int SuccessCount => Files.Count(f => f.Status == FileSyncStatus.Success);
+    public int FailedCount => Files.Count(f => f.Status == FileSyncStatus.Failed);
+    public int SkippedCount => Files.Count(f => f.Status == FileSyncStatus.Skipped);
+    public int CancelledCount => Files.Count(f => f.Status == FileSyncStatus.Cancelled);
     public bool HasFailures => FailedCount > 0;
 }
 
@@ -37,7 +38,7 @@ public readonly record struct SyncProgressReport(
     int CompletedCount,
     int TotalCount,
     string CurrentPath,
-    SyncStatus LastFileStatus = SyncStatus.Success
+    FileSyncStatus LastFileStatus = FileSyncStatus.Success
 )
 {
     public float Fraction => TotalCount == 0 ? 0f : (float)CompletedCount / TotalCount;

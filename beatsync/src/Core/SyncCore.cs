@@ -65,6 +65,7 @@ public static class SyncCore
     // Lol, SyncAsync...
     public static async Task<SyncResult> SyncMusicAsync(
         AppState appState,
+        bool isDryRun,
         IProgress<SyncProgressReport>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -122,7 +123,7 @@ public static class SyncCore
                         Path: job.SongPath,
                         Started: DateTimeOffset.UtcNow,
                         Completed: DateTimeOffset.UtcNow,
-                        Status: SyncStatus.Skipped
+                        Status: FileSyncStatus.Skipped
                     );
                     
                     return;
@@ -132,14 +133,21 @@ public static class SyncCore
 
                 try
                 {
-                    // Simulated song processing/transfer
-                    await Task.Delay(500, ct);
+                    if (isDryRun)
+                    {
+                        // Simulated song processing/transfer
+                        await Task.Delay(80, ct);
+                    }
+                    else
+                    {
+                        //Actually do transfer
+                    }
 
                     fileResults[index] = new FileSyncResult(
                         Path: job.SongPath,
                         Started: startTime,
                         Completed: DateTimeOffset.UtcNow,
-                        Status: SyncStatus.Success
+                        Status: FileSyncStatus.Success
                     );
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -148,7 +156,7 @@ public static class SyncCore
                         Path: job.SongPath,
                         Started: startTime,
                         Completed: DateTimeOffset.UtcNow,
-                        Status: SyncStatus.Cancelled
+                        Status: FileSyncStatus.Cancelled
                     );
                 }
                 catch (Exception ex)
@@ -157,7 +165,7 @@ public static class SyncCore
                         Path: job.SongPath,
                         Started: startTime,
                         Completed: DateTimeOffset.UtcNow,
-                        Status: SyncStatus.Failed,
+                        Status: FileSyncStatus.Failed,
                         ErrorMessage: ex.Message
                     );
                 }
@@ -191,7 +199,7 @@ public static class SyncCore
                     Path: syncJobList[i].SongPath,
                     Started: DateTimeOffset.UtcNow,
                     Completed: DateTimeOffset.UtcNow,
-                    Status: SyncStatus.Skipped
+                    Status: FileSyncStatus.Skipped
                 );
             }
         }
@@ -201,7 +209,7 @@ public static class SyncCore
         {
             resultType = ResultType.Cancelled;
         }
-        else if (fileResults.Any(f => f.Status == SyncStatus.Failed))
+        else if (fileResults.Any(f => f.Status == FileSyncStatus.Failed))
         {
             resultType = ResultType.Error;
         }
