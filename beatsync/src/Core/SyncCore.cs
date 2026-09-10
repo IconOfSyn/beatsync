@@ -75,9 +75,20 @@ public static class SyncCore
 
                     if (!existingTargetFiles.Contains(relativePath))
                     {
+                        long fileSizeBytes = 0;
+                        try
+                        {
+                            fileSizeBytes = new FileInfo(sourceFile).Length;
+                        }
+                        catch
+                        {
+                            // Best effort querying file size
+                        }
+
                         syncJobList.Add(new SyncJob
                         {
                             SongPath = relativePath,
+                            FileSizeBytes = fileSizeBytes,
                             PercentageComplete = 0f
                         });
                     }
@@ -149,6 +160,8 @@ public static class SyncCore
         var syncJobList = diffResult.Jobs;
         var fileResults = new FileSyncResult[syncJobList.Count];
         int completedCount = 0;
+        long totalBytesToTransfer = syncJobList.Sum(j => j.FileSizeBytes);
+        long totalBytesTransferred = 0;
 
         var parallelOptions = new ParallelOptions
         {
@@ -176,18 +189,24 @@ public static class SyncCore
 
                 var startTime = DateTimeOffset.UtcNow;
 
-                try
+                if (isDryRun)
                 {
-                    if (isDryRun)
+                    try
                     {
-                        // Simulated song processing/transfer
                         await Task.Delay(80, ct);
                     }
-                    else
+                    catch (OperationCanceledException)
                     {
-                        //Actually do transfer
+                        fileResults[index] = new FileSyncResult(
+                            Path: job.SongPath,
+                            Started: startTime,
+                            Completed: DateTimeOffset.UtcNow,
+                            Status: FileSyncStatus.Cancelled
+                        );
+                        return;
                     }
 
+                    Interlocked.Add(ref totalBytesTransferred, job.FileSizeBytes);
                     fileResults[index] = new FileSyncResult(
                         Path: job.SongPath,
                         Started: startTime,
@@ -195,36 +214,36 @@ public static class SyncCore
                         Status: FileSyncStatus.Success
                     );
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                else
                 {
+                    string sourceFullPath = Path.Combine(appState.SourcePath, job.SongPath);
+                    string targetFullPath = Path.Combine(appState.TargetPath, job.SongPath);
+
+                    var copyResult = await CopyFileAsync(
+                        sourceFullPath,
+                        targetFullPath,
+                        bytesRead => Interlocked.Add(ref totalBytesTransferred, bytesRead),
+                        ct);
+
                     fileResults[index] = new FileSyncResult(
                         Path: job.SongPath,
                         Started: startTime,
                         Completed: DateTimeOffset.UtcNow,
-                        Status: FileSyncStatus.Cancelled
+                        Status: copyResult.Status,
+                        ErrorMessage: copyResult.ErrorMessage
                     );
                 }
-                catch (Exception ex)
-                {
-                    fileResults[index] = new FileSyncResult(
-                        Path: job.SongPath,
-                        Started: startTime,
-                        Completed: DateTimeOffset.UtcNow,
-                        Status: FileSyncStatus.Failed,
-                        ErrorMessage: ex.Message
-                    );
-                }
-                finally
-                {
-                    int completed = Interlocked.Increment(ref completedCount);
-                    
-                    progress?.Report(new SyncProgressReport(
-                        completed,
-                        syncJobList.Count,
-                        job.SongPath,
-                        fileResults[index].Status
-                    ));
-                }
+
+                int completed = Interlocked.Increment(ref completedCount);
+
+                progress?.Report(new SyncProgressReport(
+                    completed,
+                    syncJobList.Count,
+                    job.SongPath,
+                    fileResults[index].Status,
+                    Interlocked.Read(ref totalBytesTransferred),
+                    totalBytesToTransfer
+                ));
             });
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -271,5 +290,83 @@ public static class SyncCore
         };
     }
 
+    private const int CopyBufferSize = 128 * 1024; // 128 KB buffer
 
+    private static async Task<FileCopyResult> CopyFileAsync(
+        string sourcePath,
+        string targetPath,
+        Action<int> onBytesRead,
+        CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested)
+        {
+            return new FileCopyResult(FileSyncStatus.Cancelled);
+        }
+
+        string? targetDir = Path.GetDirectoryName(targetPath);
+        if (!string.IsNullOrEmpty(targetDir))
+        {
+            try
+            {
+                Directory.CreateDirectory(targetDir);
+            }
+            catch (Exception ex)
+            {
+                return new FileCopyResult(FileSyncStatus.Failed, $"Failed to create directory '{targetDir}': {ex.Message}");
+            }
+        }
+
+        string tempTargetPath = targetPath + ".bsyn-tmp";
+
+        try
+        {
+            var fileOptions = FileOptions.Asynchronous | FileOptions.SequentialScan;
+
+            await using (var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, CopyBufferSize, fileOptions))
+            await using (var targetStream = new FileStream(tempTargetPath, FileMode.Create, FileAccess.Write, FileShare.None, CopyBufferSize, fileOptions))
+            {
+                byte[] buffer = new byte[CopyBufferSize];
+                int bytesRead;
+
+                while ((bytesRead = await sourceStream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct)) > 0)
+                {
+                    await targetStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
+                    onBytesRead(bytesRead);
+                }
+            }
+
+            // Atomic move into final location
+            File.Move(tempTargetPath, targetPath, overwrite: true);
+
+            // Preserve modification timestamp
+            File.SetLastWriteTimeUtc(targetPath, File.GetLastWriteTimeUtc(sourcePath));
+
+            return new FileCopyResult(FileSyncStatus.Success);
+        }
+        catch (OperationCanceledException)
+        {
+            CleanupTempFile(tempTargetPath);
+            return new FileCopyResult(FileSyncStatus.Cancelled);
+        }
+        catch (Exception ex)
+        {
+            CleanupTempFile(tempTargetPath);
+            return new FileCopyResult(FileSyncStatus.Failed, ex.Message);
+        }
+    }
+
+    private static void CleanupTempFile(string path)
+    {
+        if (File.Exists(path))
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch
+            {
+                // Best effort cleanup
+            }
+        }
+    }
 }

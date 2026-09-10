@@ -34,15 +34,36 @@ public sealed record SyncResult
     public bool HasFailures => FailedCount > 0;
 }
 
+public readonly record struct FileCopyResult(
+    FileSyncStatus Status,
+    string? ErrorMessage = null
+);
+
 public readonly record struct SyncProgressReport(
     int CompletedCount,
     int TotalCount,
     string CurrentPath,
-    FileSyncStatus LastFileStatus = FileSyncStatus.Success
+    FileSyncStatus LastFileStatus = FileSyncStatus.Success,
+    long BytesTransferred = 0,
+    long TotalBytes = 0
 )
 {
     public float Fraction => TotalCount == 0 ? 0f : (float)CompletedCount / TotalCount;
     public int Percent => (int)(Fraction * 100);
+
+    public float ByteFraction => TotalBytes == 0 ? 0f : (float)BytesTransferred / TotalBytes;
+    public int BytePercent => (int)(ByteFraction * 100);
+
+    public string FormattedProgress =>
+        $"{CompletedCount}/{TotalCount} tracks ({FormatBytes(BytesTransferred)} / {FormatBytes(TotalBytes)})";
+
+    public static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024.0):F1} MB";
+        return $"{bytes / (1024.0 * 1024.0 * 1024.0):F2} GB";
+    }
 }
 
 public enum ResultType : byte

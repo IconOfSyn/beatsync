@@ -225,12 +225,23 @@ public static class GuiApp
                         _handler.Submit(new BeatCommand { Type = CommandType.CancelSync });
                     }
 
-                    ImGui.Text($"{_lastSyncProgressReport.CompletedCount}/{_lastSyncProgressReport.TotalCount} | %{_lastSyncProgressReport.Percent}");
-                    ImGui.ProgressBar(_lastSyncProgressReport.Fraction, new Vector2(ImGui.GetWindowViewport().WorkSize.X, 30f));
+                    float progressFraction = _lastSyncProgressReport.TotalBytes > 0
+                        ? _lastSyncProgressReport.ByteFraction
+                        : _lastSyncProgressReport.Fraction;
+
+                    int progressPercent = _lastSyncProgressReport.TotalBytes > 0
+                        ? _lastSyncProgressReport.BytePercent
+                        : _lastSyncProgressReport.Percent;
+
+                    ImGui.Text($"{_lastSyncProgressReport.CompletedCount}/{_lastSyncProgressReport.TotalCount} tracks ({SyncProgressReport.FormatBytes(_lastSyncProgressReport.BytesTransferred)} / {SyncProgressReport.FormatBytes(_lastSyncProgressReport.TotalBytes)}) | {progressPercent}%");
+                    ImGui.ProgressBar(progressFraction, new Vector2(ImGui.GetWindowViewport().WorkSize.X, 30f));
                     ImGui.Text($"{_lastSyncProgressReport.CurrentPath}");
                 }
                 else
                 {
+                    ImGui.Checkbox("Dry Run", ref _isDryRun);
+                    ImGui.SameLine();
+
                     if (_handler.AppState.HasValidPaths())
                     {
                         if (ImGui.Button("Calculate Diff"))
@@ -243,7 +254,12 @@ public static class GuiApp
                     if (_syncDiffList is { Count: > 0 })
                     {
                         ImGui.SameLine();
-                        if (ImGui.Button($"Sync {_syncDiffList.Count} tracks"))
+                        long totalDiffBytes = _syncDiffList.Sum(j => j.FileSizeBytes);
+                        string syncButtonLabel = totalDiffBytes > 0
+                            ? $"Sync {_syncDiffList.Count} tracks ({SyncProgressReport.FormatBytes(totalDiffBytes)})"
+                            : $"Sync {_syncDiffList.Count} tracks";
+
+                        if (ImGui.Button(syncButtonLabel))
                         {
                             _guiStateType = GuiStateType.Syncing;
                             _handler.Submit(new BeatCommand
@@ -286,6 +302,11 @@ public static class GuiApp
                     _lastInfoMessage = $"Completed Sync: {result.SyncResult}";
                     Console.WriteLine(_lastInfoMessage);
                     _lastErrorMessage = null;
+                    if (result.ResultType == ResultType.Success)
+                    {
+                        // Refresh diff automatically so synced tracks disappear from the list
+                        _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
+                    }
                     break;
             }
 

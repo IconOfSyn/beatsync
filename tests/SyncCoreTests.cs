@@ -61,6 +61,43 @@ public class SyncCoreTests
         Assert.That(result.ResultType == ResultType.Success);
         Assert.That(result.FailedCount == 0);
     }
+
+    [Test]
+    public async Task RealSync_CopiesFilesToTarget()
+    {
+        var cancelTokenSource = new CancellationTokenSource();
+        var result = await SyncCore.SyncMusicAsync(_appState, isDryRun: false, cancellationToken: cancelTokenSource.Token);
+
+        Assert.That(result.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(result.SuccessCount, Is.EqualTo(2));
+        Assert.That(result.FailedCount, Is.EqualTo(0));
+
+        var targetFile1 = Path.Combine(_appState.TargetPath!, "AvengedSevenfold", "CityOfEvil", "BeastAndTheHarlot.flac");
+        var targetFile2 = Path.Combine(_appState.TargetPath!, "AvengedSevenfold", "TheStage", "TheStage.flac");
+
+        Assert.That(File.Exists(targetFile1), Is.True, "Target file 1 should exist");
+        Assert.That(File.Exists(targetFile2), Is.True, "Target file 2 should exist");
+
+        var sourceFile1 = Path.Combine(_appState.SourcePath!, "AvengedSevenfold", "CityOfEvil", "BeastAndTheHarlot.flac");
+        Assert.That(new FileInfo(targetFile1).Length, Is.EqualTo(new FileInfo(sourceFile1).Length));
+    }
+
+    [Test]
+    public async Task RealSync_WhenCancelled_CleansUpTempFiles()
+    {
+        var cancelTokenSource = new CancellationTokenSource();
+        cancelTokenSource.Cancel();
+
+        var result = await SyncCore.SyncMusicAsync(_appState, isDryRun: false, cancellationToken: cancelTokenSource.Token);
+
+        Assert.That(result.ResultType, Is.EqualTo(ResultType.Cancelled));
+
+        if (Directory.Exists(_appState.TargetPath))
+        {
+            var tempFiles = Directory.GetFiles(_appState.TargetPath, "*.bsyn-tmp", SearchOption.AllDirectories);
+            Assert.That(tempFiles, Is.Empty);
+        }
+    }
     
     [Test]
     public async Task CancelWorksTest()
