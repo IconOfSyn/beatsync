@@ -6,60 +6,109 @@ public static class SyncCore
 {
     public const int MaxSyncStreams = 20;
     
-    public static async Task<List<SyncJob>> BuildSyncList(AppState appState, CancellationToken cancellationToken = default)
+    public static async Task<DiffResult> BuildSyncList(AppState appState, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(appState.SourcePath) || !Directory.Exists(appState.SourcePath))
         {
-            Console.WriteLine($"Source directory does not exist or is invalid: '{appState.SourcePath}'");
-            return [];
+            return new DiffResult
+            {
+                ResultType = ResultType.Error,
+                Jobs = [],
+                ErrorMessage = $"Source directory does not exist or is invalid: '{appState.SourcePath}'"
+            };
         }
 
         if (string.IsNullOrWhiteSpace(appState.TargetPath))
         {
-            Console.WriteLine($"Target directory path is invalid: '{appState.TargetPath}'");
-            return [];
+            return new DiffResult
+            {
+                ResultType = ResultType.Error,
+                Jobs = [],
+                ErrorMessage = $"Target directory path is invalid: '{appState.TargetPath}'"
+            };
         }
 
-        return await Task.Run(() =>
+        if (cancellationToken.IsCancellationRequested)
         {
-            var syncJobList = new List<SyncJob>();
-
-            var options = new EnumerationOptions
+            return new DiffResult
             {
-                RecurseSubdirectories = true,
-                IgnoreInaccessible = true,
-                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
+                ResultType = ResultType.Cancelled,
+                Jobs = [],
             };
+        }
 
-            var existingTargetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (Directory.Exists(appState.TargetPath))
+        try
+        {
+            var jobs = await Task.Run(() =>
             {
-                foreach (var targetFile in Directory.EnumerateFiles(appState.TargetPath, "*", options))
+                var syncJobList = new List<SyncJob>();
+
+                var options = new EnumerationOptions
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var relTarget = Path.GetRelativePath(appState.TargetPath, targetFile);
-                    existingTargetFiles.Add(relTarget);
-                }
-            }
+                    RecurseSubdirectories = true,
+                    IgnoreInaccessible = true,
+                    AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
+                };
 
-            foreach (var sourceFile in Directory.EnumerateFiles(appState.SourcePath, "*", options))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var relativePath = Path.GetRelativePath(appState.SourcePath, sourceFile);
-
-                if (!existingTargetFiles.Contains(relativePath))
+                var existingTargetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (Directory.Exists(appState.TargetPath))
                 {
-                    syncJobList.Add(new SyncJob
+                    foreach (var targetFile in Directory.EnumerateFiles(appState.TargetPath, "*", options))
                     {
-                        SongPath = relativePath,
-                        PercentageComplete = 0f
-                    });
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            return null;
+                        }
+                        var relTarget = Path.GetRelativePath(appState.TargetPath, targetFile);
+                        existingTargetFiles.Add(relTarget);
+                    }
                 }
+
+                foreach (var sourceFile in Directory.EnumerateFiles(appState.SourcePath, "*", options))
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
+
+                    var relativePath = Path.GetRelativePath(appState.SourcePath, sourceFile);
+
+                    if (!existingTargetFiles.Contains(relativePath))
+                    {
+                        syncJobList.Add(new SyncJob
+                        {
+                            SongPath = relativePath,
+                            PercentageComplete = 0f
+                        });
+                    }
+                }
+
+                return syncJobList;
+            }, cancellationToken);
+
+            if (jobs is null)
+            {
+                return new DiffResult
+                {
+                    ResultType = ResultType.Cancelled,
+                    Jobs = [],
+                };
             }
 
-            return syncJobList;
-        }, cancellationToken);
+            return new DiffResult
+            {
+                ResultType = ResultType.Success,
+                Jobs = jobs,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            return new DiffResult
+            {
+                ResultType = ResultType.Cancelled,
+                Jobs = [],
+            };
+        }
     }
     
     // Lol, SyncAsync...
@@ -85,23 +134,19 @@ public static class SyncCore
         
         var stopwatch = Stopwatch.StartNew();
         
-        List<SyncJob> syncJobList;
-        try
+        var diffResult = await BuildSyncList(appState, cancellationToken);
+        if (diffResult.ResultType != ResultType.Success)
         {
-            syncJobList = await BuildSyncList(appState, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            Console.Write("Cancellation Complete");
             stopwatch.Stop();
             return new SyncResult
             {
-                ResultType = ResultType.Cancelled,
+                ResultType = diffResult.ResultType,
                 Files = [],
                 Elapsed = stopwatch.Elapsed
             };
         }
-        
+
+        var syncJobList = diffResult.Jobs;
         var fileResults = new FileSyncResult[syncJobList.Count];
         int completedCount = 0;
 

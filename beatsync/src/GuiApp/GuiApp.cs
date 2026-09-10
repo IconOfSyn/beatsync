@@ -13,17 +13,21 @@ public static class GuiApp
     private static readonly Vector4 _warningColor = new Vector4(0.9f, 0.7f, 0.2f, 1f);
     private static readonly Vector4 _errorColor = new Vector4(0.9f, 0.4f, 0.4f, 1f);
 
-    // App state
-    private static AppState _appState = new();
+    
+    // Command handler
+    private static BeatCommandHandler _handler = new();
     
     // Transient State
     private static bool _isBrowsingSource;
     private static bool _isBrowsingTarget;
     private static List<SyncJob>? _syncDiffList;
     private static GuiStateType _guiStateType = GuiStateType.Idle;
-    private static CancellationTokenSource? _syncCancelTokenSource;
     private static SyncProgressReport _lastSyncProgressReport;
     private static bool _isDryRun;
+    private static string? _lastErrorMessage;
+    private static string? _lastInfoMessage;
+    private static string _tempSourcePath = "";
+    private static string _tempTargetPath = "";
     
     public static void Run(bool isDryRun)
     {
@@ -36,29 +40,35 @@ public static class GuiApp
 
         var saveFile = Path.Combine(GetOrCreateWritableDirectory(), "SaveState.bsyn");
 
-        _appState = LoadAppState(saveFile);
+        _handler.AppState = LoadAppState(saveFile);
 
-        CalculateDiffAsync(_appState, (diffList)=> _syncDiffList = diffList);
+        _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
+
+        _tempSourcePath = _handler.AppState.SourcePath;
+        _tempTargetPath = _handler.AppState.TargetPath;
         
         while (!Raylib.WindowShouldClose())
         {
+            _handler.ProcessCommands();
+            DrainResults();
+            
             Raylib.BeginDrawing();
             Raylib.ClearBackground(new Color(0, 0, 0, 1));
 
             rlImGui.Begin();			// starts the ImGui content mode. Make all ImGui calls after this
 
-            if (ImGui.BeginMainMenuBar()) {
-                if (ImGui.BeginMenu("File")) {
-                    ImGui.MenuItem("New", "Ctrl+N");
-                    ImGui.MenuItem("Open", "Ctrl+O");
-                    ImGui.EndMenu();
-                }
-                if (ImGui.BeginMenu("Edit")) {
-                    ImGui.MenuItem("Open", "Ctrl+O");
-                    ImGui.EndMenu();
-                }
-                ImGui.EndMainMenuBar();
-            }
+            // if (ImGui.BeginMainMenuBar()) {
+            //     if (ImGui.BeginMenu("File")) {
+            //         ImGui.MenuItem("New", "Ctrl+N");
+            //         ImGui.MenuItem("Open", "Ctrl+O");
+            //         ImGui.EndMenu();
+            //     }
+            //     if (ImGui.BeginMenu("Edit")) {
+            //         ImGui.MenuItem("Open", "Ctrl+O");
+            //         ImGui.EndMenu();
+            //     }
+            //     ImGui.EndMainMenuBar();
+            // }
 
             var viewport = ImGui.GetMainViewport();
             ImGui.SetNextWindowPos(viewport.WorkPos);
@@ -79,9 +89,36 @@ public static class GuiApp
 
             if (isWindowOpen)
             {
+                if (!string.IsNullOrWhiteSpace(_lastErrorMessage))
+                {
+                    ImGui.TextColored(_errorColor, $"{_lastErrorMessage}");
+                
+                    ImGui.Spacing();
+                    ImGui.Separator();
+                    ImGui.Spacing();
+                }
+                
+                if (!string.IsNullOrWhiteSpace(_lastInfoMessage))
+                {
+                    ImGui.TextWrapped($"{_lastInfoMessage}");
+                
+                    ImGui.Spacing();
+                    ImGui.Separator();
+                    ImGui.Spacing();
+                }
+                
                 ImGui.Text("Source Directory:");
                 ImGui.SetNextItemWidth(450);
-                ImGui.InputText("##SourcePath", ref _appState.SourcePath, 1024);
+                
+                if (ImGui.InputText("##SourcePath", ref _tempSourcePath, MaxDirectoryLength))
+                {
+                    _handler.Submit(new BeatCommand
+                    {
+                        Type = CommandType.MountSourceDirectory,
+                        Path = _tempSourcePath
+                    });
+                }
+                
                 ImGui.SameLine();
                 if (_isBrowsingSource)
                 {
@@ -95,19 +132,26 @@ public static class GuiApp
                     {
                         _isBrowsingSource = true;
                         
-                        PickDirectoryAsync(_appState.SourcePath, "Select Source Directory", (selected) =>
+                        PickDirectoryAsync(_handler.AppState.SourcePath, "Select Source Directory", (selected) =>
                         {
-                            _appState.SourcePath = selected;
                             _isBrowsingSource = false;
+                            
+                            _handler.Submit(new BeatCommand
+                            {
+                                Type = CommandType.MountSourceDirectory,
+                                Path = selected,
+                            });
+                            
+                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
                         });
                     }
                 }
 
-                if (!string.IsNullOrWhiteSpace(_appState.SourcePath))
+                if (!string.IsNullOrWhiteSpace(_handler.AppState.SourcePath))
                 {
-                    if (Directory.Exists(_appState.SourcePath))
+                    if (Directory.Exists(_handler.AppState.SourcePath))
                     {
-                        ImGui.TextColored(_goodColor, "✓ Directory exists");
+                        ImGui.TextColored(_goodColor, "* Directory exists");
                     }
                     else
                     {
@@ -121,7 +165,14 @@ public static class GuiApp
 
                 ImGui.Text("Target Directory:");
                 ImGui.SetNextItemWidth(450);
-                ImGui.InputText("##TargetPath", ref _appState.TargetPath, MaxDirectoryLength);
+                if (ImGui.InputText("##TargetPath", ref _tempTargetPath, MaxDirectoryLength))
+                {
+                    _handler.Submit(new BeatCommand
+                    {
+                        Type = CommandType.MountTargetDirectory,
+                        Path = _tempTargetPath
+                    });
+                }
                 ImGui.SameLine();
                 
                 if (_isBrowsingTarget)
@@ -136,19 +187,24 @@ public static class GuiApp
                     {
                         _isBrowsingTarget = true;
                         
-                        PickDirectoryAsync( _appState.TargetPath, "Select Target Directory", (selected) =>
+                        PickDirectoryAsync(_handler.AppState.TargetPath, "Select Target Directory", (selected) =>
                         {
-                            _appState.TargetPath = selected;
                             _isBrowsingTarget = false;
                             
-                            CalculateDiffAsync(_appState, (diffList)=> _syncDiffList = diffList);
+                            _handler.Submit(new BeatCommand
+                            {
+                                Type = CommandType.MountTargetDirectory,
+                                Path = selected,
+                            });
+                                
+                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
                         });
                     }
                 }
 
-                if (!string.IsNullOrWhiteSpace(_appState.TargetPath))
+                if (!string.IsNullOrWhiteSpace(_handler.AppState.TargetPath))
                 {
-                    if (Directory.Exists(_appState.TargetPath))
+                    if (Directory.Exists(_handler.AppState.TargetPath))
                     {
                         ImGui.TextColored(_goodColor, "✓ Directory exists");
                     }
@@ -166,7 +222,7 @@ public static class GuiApp
                 {
                     if (ImGui.Button("Cancel"))
                     {
-                        _syncCancelTokenSource?.Cancel();
+                        _handler.Submit(new BeatCommand { Type = CommandType.CancelSync });
                     }
 
                     ImGui.Text($"{_lastSyncProgressReport.CompletedCount}/{_lastSyncProgressReport.TotalCount} | %{_lastSyncProgressReport.Percent}");
@@ -175,11 +231,12 @@ public static class GuiApp
                 }
                 else
                 {
-                    if (_appState.HasValidPaths())
+                    if (_handler.AppState.HasValidPaths())
                     {
                         if (ImGui.Button("Calculate Diff"))
                         {
-                            CalculateDiffAsync(_appState, (diffList)=> _syncDiffList = diffList);
+                            _guiStateType = GuiStateType.CalculatingDiff;
+                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff });
                         }
                     }
 
@@ -188,9 +245,11 @@ public static class GuiApp
                         ImGui.SameLine();
                         if (ImGui.Button($"Sync {_syncDiffList.Count} tracks"))
                         {
-                            BeginSync(_appState, (results) =>
+                            _guiStateType = GuiStateType.Syncing;
+                            _handler.Submit(new BeatCommand
                             {
-                                Console.WriteLine($"Completed Sync: {results}");
+                                Type = CommandType.SyncLibrary,
+                                IsDryRun = _isDryRun,
                             });
                         }
                     }
@@ -206,37 +265,57 @@ public static class GuiApp
         rlImGui.Shutdown();		// cleans up ImGui
         Raylib.CloseWindow();
         
-        SaveAppState(saveFile, _appState);
+        SaveAppState(saveFile, _handler.AppState);
     }
 
-    private static void CalculateDiffAsync(AppState appState, Action<List<SyncJob>> onComplete)
+    private static void DrainResults()
     {
-        _guiStateType = GuiStateType.CalculatingDiff;
-        
-        Task.Run(async () =>
+        while (_handler.TryDequeueResult(out var result))
         {
-            var diffList = await SyncCore.BuildSyncList(appState, default);
-            
-            _guiStateType = GuiStateType.Idle;
-            onComplete?.Invoke(diffList);
-        });
+            switch (result.CommandType)
+            {
+                case CommandType.CalculateDiff:
+                    _guiStateType = GuiStateType.Idle;
+                    _syncDiffList = result.DiffList;
+                    _lastInfoMessage = $"Sync Track Count: {result.DiffList?.Count}";
+                    _lastErrorMessage = null;
+                    break;
+                    
+                case CommandType.SyncLibrary:
+                    _guiStateType = GuiStateType.Idle;
+                    _lastInfoMessage = $"Completed Sync: {result.SyncResult}";
+                    Console.WriteLine(_lastInfoMessage);
+                    _lastErrorMessage = null;
+                    break;
+            }
+
+            if (!string.IsNullOrEmpty(result.ErrorMessage))
+            {
+                _lastErrorMessage = result.ErrorMessage;
+                Console.WriteLine(_lastErrorMessage);
+            }
+        }
+        
+        // Read progress from handler (written by background sync task)
+        if (_guiStateType == GuiStateType.Syncing)
+        {
+            _lastSyncProgressReport = _handler.LatestProgress;
+        }
     }
-    
-    private static void BeginSync(AppState appState, Action<SyncResult> onComplete)
+
+    private static void PickDirectoryAsync(string initialPath, string prompt, Action<string?> onComplete)
     {
-        _guiStateType = GuiStateType.Syncing;
-        _syncCancelTokenSource = new CancellationTokenSource();
-
-        _lastSyncProgressReport = default;
-
-        var progress = new Progress<SyncProgressReport>(report => _lastSyncProgressReport = report);
-        
-        Task.Run(async () =>
+        Task.Run(() =>
         {
-            var result = await SyncCore.SyncMusicAsync(appState, _isDryRun, progress, _syncCancelTokenSource.Token);
-            
-            _guiStateType = GuiStateType.Idle;
-            onComplete?.Invoke(result);
+            string? selected = null;
+            try
+            {
+                selected = FolderDialog.PickFolder(prompt, initialPath);
+            }
+            finally
+            {
+                onComplete?.Invoke(selected);
+            }
         });
     }
 
@@ -272,23 +351,6 @@ public static class GuiApp
         Directory.CreateDirectory(appFolder);
 
         return appFolder;
-    }
-
-    private static void PickDirectoryAsync(string initialPath, string prompt, Action<string> onComplete)
-    {
-        Task.Run(() =>
-        {
-            string? selected = null;
-            try
-            {
-                selected = FolderDialog.PickFolder(prompt, initialPath);
-               
-            }
-            finally
-            {
-                onComplete?.Invoke(selected);
-            }
-        });
     }
 
     public enum GuiStateType : byte

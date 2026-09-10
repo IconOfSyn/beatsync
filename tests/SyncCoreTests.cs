@@ -56,7 +56,7 @@ public class SyncCoreTests
     public async Task BasicSyncTest()
     {
         var cancelTokenSource = new CancellationTokenSource();
-        var result = await SyncCore.SyncMusicAsync(_appState, null, cancelTokenSource.Token);
+        var result = await SyncCore.SyncMusicAsync(_appState, isDryRun: true, cancellationToken: cancelTokenSource.Token);
         
         Assert.That(result.ResultType == ResultType.Success);
         Assert.That(result.FailedCount == 0);
@@ -68,7 +68,7 @@ public class SyncCoreTests
         var cancelTokenSource = new CancellationTokenSource();
         cancelTokenSource.Cancel();
         
-        var result = await SyncCore.SyncMusicAsync(_appState, null, cancelTokenSource.Token);
+        var result = await SyncCore.SyncMusicAsync(_appState, isDryRun: true, cancellationToken: cancelTokenSource.Token);
         
         Assert.That(result.ResultType == ResultType.Cancelled);
     }
@@ -76,23 +76,25 @@ public class SyncCoreTests
     [Test]
     public async Task BuildFileSyncList()
     {
-        var syncList = await SyncCore.BuildSyncList(_appState, default);
+        var diffResult = await SyncCore.BuildSyncList(_appState, default);
         
-        Assert.That(syncList, Is.Not.Null);
-        Assert.That(syncList.Count > 0);
+        Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(diffResult.Jobs, Is.Not.Null);
+        Assert.That(diffResult.Jobs.Count > 0);
     }
 
     [Test]
     public async Task BuildSyncList_WhenTargetEmpty_ReturnsAllSourceFiles()
     {
-        var syncList = await SyncCore.BuildSyncList(_appState, default);
+        var diffResult = await SyncCore.BuildSyncList(_appState, default);
 
         var expectedFile1 = Path.Combine("AvengedSevenfold", "CityOfEvil", "BeastAndTheHarlot.flac");
         var expectedFile2 = Path.Combine("AvengedSevenfold", "TheStage", "TheStage.flac");
 
-        Assert.That(syncList, Has.Count.EqualTo(2));
-        Assert.That(syncList.Select(j => j.SongPath), Does.Contain(expectedFile1));
-        Assert.That(syncList.Select(j => j.SongPath), Does.Contain(expectedFile2));
+        Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(diffResult.Jobs, Has.Count.EqualTo(2));
+        Assert.That(diffResult.Jobs.Select(j => j.SongPath), Does.Contain(expectedFile1));
+        Assert.That(diffResult.Jobs.Select(j => j.SongPath), Does.Contain(expectedFile2));
     }
 
     [Test]
@@ -105,11 +107,12 @@ public class SyncCoreTests
         Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
         await File.WriteAllTextAsync(targetFile, "dummy flac content");
 
-        var syncList = await SyncCore.BuildSyncList(_appState, default);
+        var diffResult = await SyncCore.BuildSyncList(_appState, default);
 
         var missingRelative = Path.Combine("AvengedSevenfold", "TheStage", "TheStage.flac");
-        Assert.That(syncList, Has.Count.EqualTo(1));
-        Assert.That(syncList[0].SongPath, Is.EqualTo(missingRelative));
+        Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(diffResult.Jobs, Has.Count.EqualTo(1));
+        Assert.That(diffResult.Jobs[0].SongPath, Is.EqualTo(missingRelative));
     }
 
     [Test]
@@ -126,28 +129,32 @@ public class SyncCoreTests
         await File.WriteAllTextAsync(file1, "dummy");
         await File.WriteAllTextAsync(file2, "dummy");
 
-        var syncList = await SyncCore.BuildSyncList(_appState, default);
+        var diffResult = await SyncCore.BuildSyncList(_appState, default);
 
-        Assert.That(syncList, Is.Empty);
+        Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(diffResult.Jobs, Is.Empty);
     }
 
     [Test]
-    public void BuildSyncList_WhenCancelled_ThrowsOperationCanceledException()
+    public async Task BuildSyncList_WhenCancelled_ReturnsCancelledResult()
     {
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        Assert.CatchAsync<OperationCanceledException>(async () =>
-            await SyncCore.BuildSyncList(_appState, cts.Token));
+        var diffResult = await SyncCore.BuildSyncList(_appState, cts.Token);
+        
+        Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Cancelled));
     }
 
     [Test]
-    public async Task BuildSyncList_WhenSourceDoesNotExist_LogsAndReturnsEmptyList()
+    public async Task BuildSyncList_WhenSourceDoesNotExist_ReturnsErrorResult()
     {
         var invalidState = _appState with { SourcePath = Path.Combine(AppContext.BaseDirectory, "NonExistentSource") };
-        var syncList = await SyncCore.BuildSyncList(invalidState, default);
+        var diffResult = await SyncCore.BuildSyncList(invalidState, default);
 
-        Assert.That(syncList, Is.Empty);
+        Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Error));
+        Assert.That(diffResult.Jobs, Is.Empty);
+        Assert.That(diffResult.ErrorMessage, Is.Not.Null);
     }
 
     [Test]
@@ -158,8 +165,9 @@ public class SyncCoreTests
 
         try
         {
-            var syncList = await SyncCore.BuildSyncList(state, default);
-            Assert.That(syncList, Has.Count.EqualTo(2));
+            var diffResult = await SyncCore.BuildSyncList(state, default);
+            Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
+            Assert.That(diffResult.Jobs, Has.Count.EqualTo(2));
         }
         finally
         {
