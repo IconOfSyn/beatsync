@@ -8,11 +8,58 @@ public static class SyncCore
     
     public static async Task<List<SyncJob>> BuildSyncList(BeatState beatState, CancellationToken cancellationToken = default)
     {
-        var syncJobList = new List<SyncJob>();
-        syncJobList.Add(new SyncJob { SongPath = "AvengedSevenfold/CityOfEvil/BeastAndTheHarlot.flac" });
-        syncJobList.Add(new SyncJob { SongPath = "AvengedSevenfold/TheStage/TheStage.flac" });
+        if (string.IsNullOrWhiteSpace(beatState.SourcePath) || !Directory.Exists(beatState.SourcePath))
+        {
+            Console.WriteLine($"Source directory does not exist or is invalid: '{beatState.SourcePath}'");
+            return [];
+        }
 
-        return syncJobList;
+        if (string.IsNullOrWhiteSpace(beatState.TargetPath))
+        {
+            Console.WriteLine($"Target directory path is invalid: '{beatState.TargetPath}'");
+            return [];
+        }
+
+        return await Task.Run(() =>
+        {
+            var syncJobList = new List<SyncJob>();
+
+            var options = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
+            };
+
+            var existingTargetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (Directory.Exists(beatState.TargetPath))
+            {
+                foreach (var targetFile in Directory.EnumerateFiles(beatState.TargetPath, "*", options))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var relTarget = Path.GetRelativePath(beatState.TargetPath, targetFile);
+                    existingTargetFiles.Add(relTarget);
+                }
+            }
+
+            foreach (var sourceFile in Directory.EnumerateFiles(beatState.SourcePath, "*", options))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var relativePath = Path.GetRelativePath(beatState.SourcePath, sourceFile);
+
+                if (!existingTargetFiles.Contains(relativePath))
+                {
+                    syncJobList.Add(new SyncJob
+                    {
+                        SongPath = relativePath,
+                        PercentageComplete = 0f
+                    });
+                }
+            }
+
+            return syncJobList;
+        }, cancellationToken);
     }
     
     // Lol, SyncAsync...
@@ -37,7 +84,22 @@ public static class SyncCore
         
         var stopwatch = Stopwatch.StartNew();
         
-        var syncJobList = await BuildSyncList(beatState, cancellationToken);
+        List<SyncJob> syncJobList;
+        try
+        {
+            syncJobList = await BuildSyncList(beatState, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            Console.Write("Cancellation Complete");
+            stopwatch.Stop();
+            return new SyncResult
+            {
+                ResultType = ResultType.Cancelled,
+                Files = [],
+                Elapsed = stopwatch.Elapsed
+            };
+        }
         
         var fileResults = new FileSyncResult[syncJobList.Count];
         int completedCount = 0;
