@@ -41,7 +41,7 @@ public class BeatCommandHandler
 
     private void HandleMountLibrary(BeatCommand command)
     {
-        BeatState.LibraryPath = command.LibraryPath;
+        BeatState.SourcePath = command.LibraryPath;
     }
 
     private void HandleMountSyncTarget(BeatCommand command)

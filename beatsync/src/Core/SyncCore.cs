@@ -6,7 +6,7 @@ public static class SyncCore
 {
     public const int MaxSyncStreams = 20;
     
-    public static async Task<List<SyncJob>> BuildSyncList(BeatState beatState)
+    public static async Task<List<SyncJob>> BuildSyncList(BeatState beatState, CancellationToken cancellationToken = default)
     {
         var syncJobList = new List<SyncJob>();
         syncJobList.Add(new SyncJob { SongPath = "AvengedSevenfold/CityOfEvil/BeastAndTheHarlot.flac" });
@@ -37,9 +37,9 @@ public static class SyncCore
         
         var stopwatch = Stopwatch.StartNew();
         
-        var syncJobList = await BuildSyncList(beatState);
-        var fileResults = new FileSyncResult[syncJobList.Count];
+        var syncJobList = await BuildSyncList(beatState, cancellationToken);
         
+        var fileResults = new FileSyncResult[syncJobList.Count];
         int completedCount = 0;
 
         var parallelOptions = new ParallelOptions
