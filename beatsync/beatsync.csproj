@@ -6,7 +6,7 @@
         <LangVersion>14</LangVersion>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <PublishAot>true</PublishAot>
+        <SelfContained>true</SelfContained>
     </PropertyGroup>
 
     <ItemGroup>
