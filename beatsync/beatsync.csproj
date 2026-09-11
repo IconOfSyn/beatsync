@@ -13,7 +13,11 @@
         <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
         <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     </PropertyGroup>
-
+    
+    <Target Name="CleanArtifactsFolder" BeforeTargets="BeforeBuild;BeforePublish">
+        <RemoveDir Directories="artifacts" />
+    </Target>
+    
     <ItemGroup>
       <PackageReference Include="CliFx" Version="3.0.1" />
       <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
