@@ -313,21 +313,17 @@ public class SyncCoreTests
     }
 
     [Test]
-    public async Task CalculateDiffSizes_EnrichesJobsWithByteCounts()
+    public async Task BuildSyncList_PopulatesFileSizesAndTotalBytes()
     {
         var diffResult = await SyncCore.BuildSyncListAsync(_appState, default);
+
         Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
         Assert.That(diffResult.Jobs, Has.Count.EqualTo(2));
-        Assert.That(diffResult.TotalDiffBytes, Is.EqualTo(0));
-        Assert.That(diffResult.Jobs[0].FileSizeBytes, Is.EqualTo(0));
-
-        var sizeResult = await SyncCore.CalculateDiffSizesAsync(_appState, diffResult, default);
-
-        Assert.That(sizeResult.ResultType, Is.EqualTo(ResultType.Success));
-        Assert.That(sizeResult.TotalDiffBytes, Is.GreaterThan(0));
-        Assert.That(sizeResult.Jobs[0].FileSizeBytes, Is.GreaterThan(0));
-        Assert.That(sizeResult.Jobs[1].FileSizeBytes, Is.GreaterThan(0));
-        Assert.That(sizeResult.TotalDiffBytes, Is.EqualTo(sizeResult.Jobs[0].FileSizeBytes + sizeResult.Jobs[1].FileSizeBytes));
+        Assert.That(diffResult.TotalDiffBytes, Is.GreaterThan(0));
+        Assert.That(diffResult.Jobs[0].FileSizeBytes, Is.GreaterThan(0));
+        Assert.That(diffResult.Jobs[1].FileSizeBytes, Is.GreaterThan(0));
+        Assert.That(diffResult.TotalDiffBytes, Is.EqualTo(
+            diffResult.Jobs[0].FileSizeBytes + diffResult.Jobs[1].FileSizeBytes));
     }
 
     [Test]
@@ -374,7 +370,7 @@ public class SyncCoreTests
     }
 
     [Test]
-    public async Task BeatCommandHandler_CalculateDiffSizes_UpdatesDiffResult()
+    public async Task BeatCommandHandler_CalculateDiff_ReturnsSizesInResult()
     {
         var handler = new BeatCommandHandler { AppState = _appState };
         handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 0 });
@@ -386,23 +382,8 @@ public class SyncCoreTests
         Assert.That(handler.TryDequeueResult(out var diffCmdResult), Is.True);
         Assert.That(diffCmdResult.ResultType, Is.EqualTo(ResultType.Success));
         Assert.That(diffCmdResult.DiffResult.Jobs, Has.Count.EqualTo(2));
-        Assert.That(diffCmdResult.DiffResult.TotalDiffBytes, Is.EqualTo(0));
-
-        handler.Submit(new BeatCommand
-        {
-            Type = CommandType.CalculateDiffSizes,
-            DiffResult = diffCmdResult.DiffResult
-        });
-        handler.ProcessCommands();
-
-        await Task.Delay(50);
-        handler.ProcessCommands();
-
-        Assert.That(handler.TryDequeueResult(out var sizeCmdResult), Is.True);
-        Assert.That(sizeCmdResult.CommandType, Is.EqualTo(CommandType.CalculateDiffSizes));
-        Assert.That(sizeCmdResult.ResultType, Is.EqualTo(ResultType.Success));
-        Assert.That(sizeCmdResult.DiffResult.TotalDiffBytes, Is.GreaterThan(0));
-        Assert.That(sizeCmdResult.DiffResult.HasSize, Is.True);
+        Assert.That(diffCmdResult.DiffResult.TotalDiffBytes, Is.GreaterThan(0));
+        Assert.That(diffCmdResult.DiffResult.HasSize, Is.True);
     }
 
     [Test]
@@ -485,39 +466,6 @@ public class SyncCoreTests
         );
         Assert.That(finishedReport.ProgressFraction, Is.EqualTo(1.0f));
         Assert.That(finishedReport.ProgressPercent, Is.EqualTo(100));
-    }
-
-    [Test]
-    public async Task CalculateDiffSizes_AfterTimedDiff_DoesNotCancelEarly()
-    {
-        var handler = new BeatCommandHandler { AppState = _appState };
-        // Diff with 30ms timeout
-        handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 30 });
-        handler.ProcessCommands();
-
-        await Task.Delay(10);
-        handler.ProcessCommands();
-
-        Assert.That(handler.TryDequeueResult(out var diffCmdResult), Is.True);
-        Assert.That(diffCmdResult.ResultType, Is.EqualTo(ResultType.Success));
-
-        // Sizing command dispatched
-        handler.Submit(new BeatCommand
-        {
-            Type = CommandType.CalculateDiffSizes,
-            DiffResult = diffCmdResult.DiffResult
-        });
-        handler.ProcessCommands();
-
-        // Wait longer than the original 30ms timeout to ensure sizing isn't cancelled
-        await Task.Delay(80);
-        handler.ProcessCommands();
-
-        Assert.That(handler.TryDequeueResult(out var sizeCmdResult), Is.True);
-        Assert.That(sizeCmdResult.CommandType, Is.EqualTo(CommandType.CalculateDiffSizes));
-        Assert.That(sizeCmdResult.ResultType, Is.EqualTo(ResultType.Success));
-        Assert.That(sizeCmdResult.DiffResult.HasSize, Is.True);
-        Assert.That(sizeCmdResult.DiffResult.TotalDiffBytes, Is.GreaterThan(0));
     }
 
     [Test]

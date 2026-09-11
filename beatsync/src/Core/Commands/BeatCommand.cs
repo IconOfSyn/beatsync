@@ -13,7 +13,6 @@ public enum CommandType : byte
     None,
     
     CalculateDiff,
-    CalculateDiffSizes,
     SyncLibrary,
     Cancel,
 }

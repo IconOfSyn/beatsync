@@ -118,9 +118,6 @@ public static class GuiApp
                 case CommandType.CalculateDiff:
                     HandleCalculateDiffResult(result);
                     break;
-                case CommandType.CalculateDiffSizes:
-                    HandleCalculateDiffSizesResult(result);
-                    break;
                 case CommandType.SyncLibrary:
                     HandleSyncResult(result);
                     break;
@@ -144,16 +141,6 @@ public static class GuiApp
             _diffTimedOut = false;
             _lastInfoMessage = $"Sync Track Count: {result.DiffResult.Jobs.Count} | {result.DiffResult.Elapsed}";
             _lastErrorMessage = null;
-
-            // Trigger progressive background sizing
-            if (_cachedDiffResult.IsValid())
-            {
-                _handler.Submit(new BeatCommand
-                {
-                    Type = CommandType.CalculateDiffSizes,
-                    DiffResult = _cachedDiffResult
-                });
-            }
         }
         else if (result.IsTimedOut)
         {
@@ -167,14 +154,6 @@ public static class GuiApp
             _diffTimedOut = false;
             _lastInfoMessage = "Diff scan cancelled.";
             _lastErrorMessage = null;
-        }
-    }
-
-    private static void HandleCalculateDiffSizesResult(BeatCommandResult result)
-    {
-        if (result.ResultType == ResultType.Success && _cachedDiffResult.Jobs == result.DiffResult.Jobs)
-        {
-            _cachedDiffResult = result.DiffResult;
         }
     }
 

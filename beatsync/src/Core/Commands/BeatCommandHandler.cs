@@ -47,9 +47,6 @@ public class BeatCommandHandler
                 case CommandType.CalculateDiff:
                     HandleCalculateDiff(command);
                     break;
-                case CommandType.CalculateDiffSizes:
-                    HandleCalculateDiffSizes(command);
-                    break;
                 case CommandType.SyncLibrary:
                     HandleSyncLibrary(command);
                     break;
@@ -94,42 +91,6 @@ public class BeatCommandHandler
         });
 
         _pendingTasks.Add(task);
-    }
-
-    private void HandleCalculateDiffSizes(BeatCommand command)
-    {
-        var cmdId = command.Id;
-        
-        if (command.DiffResult.IsValid())
-        {
-            _activeOpCancelTokenSource = new CancellationTokenSource();
-            var cts = _activeOpCancelTokenSource;
-            var cancelToken = cts.Token;
-
-            var task = Task.Run(async () =>
-            {
-                var sizeResult = await SyncCore.CalculateDiffSizesAsync(AppState, command.DiffResult, cancelToken);
-                return new BeatCommandResult
-                {
-                    CommandId = cmdId,
-                    CommandType = CommandType.CalculateDiffSizes,
-                    ResultType = sizeResult.ResultType,
-                    DiffResult = sizeResult
-                };
-            });
-
-            _pendingTasks.Add(task);
-        }
-        else
-        {
-            _resultQueue.Enqueue(new BeatCommandResult
-            {
-                CommandId = cmdId,
-                CommandType = CommandType.CalculateDiffSizes,
-                ResultType = ResultType.Error,
-                ErrorMessage = $"Diff Result is not valid",
-            });
-        }
     }
 
     private void HandleSyncLibrary(BeatCommand command)

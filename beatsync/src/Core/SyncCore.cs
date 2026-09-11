@@ -47,6 +47,13 @@ public static class SyncCore
         }
 
         long totalDiffBytes = 0;
+        if (resultType == ResultType.Success)
+        {
+            foreach (var job in jobs)
+            {
+                totalDiffBytes += job.FileSizeBytes;
+            }
+        }
 
         stopwatch.Stop();
 
@@ -117,9 +124,11 @@ public static class SyncCore
         return Path.Join(relDir, entry.FileName);
     }
 
+    private readonly record struct FileEntry(string Path, long Size);
+
     private readonly record struct DirectoryPartitionResult(
         List<string> Subtrees,
-        List<string> RootFiles
+        List<FileEntry> RootFiles
     );
 
     private static DirectoryPartitionResult DiscoverSubtrees(
@@ -132,10 +141,11 @@ public static class SyncCore
             return new DirectoryPartitionResult([], []);
         }
 
-        var subtrees = new List<string>();
-        var rootFiles = new List<string>();
         int prefixLen = GetPrefixLength(rootPath);
-        var queue = new Queue<string>();
+        
+        var subtrees = new List<string>(256);
+        var rootFiles = new List<FileEntry>(256);
+        var queue = new Queue<string>(256);
         queue.Enqueue(rootPath);
 
         var nonRecursiveOptions = new EnumerationOptions
@@ -193,7 +203,7 @@ public static class SyncCore
         int prefixLen,
         EnumerationOptions options,
         List<string> subDirs,
-        List<string> rootFiles,
+        List<FileEntry> rootFiles,
         CancellationToken cancellationToken)
     {
         var enumerable = new FileSystemEnumerable<bool>(
@@ -209,7 +219,7 @@ public static class SyncCore
                 }
                 else
                 {
-                    rootFiles.Add(GetRelativePath(ref entry, prefixLen));
+                    rootFiles.Add(new FileEntry(GetRelativePath(ref entry, prefixLen), entry.Length));
                 }
 
                 return true;
@@ -281,7 +291,7 @@ public static class SyncCore
                     jobs.Add(new SyncJob
                     {
                         SongPath = relPath.ToString(),
-                        FileSizeBytes = 0,
+                        FileSizeBytes = entry.Length,
                         PercentageComplete = 0f
                     });
                 }
@@ -321,7 +331,7 @@ public static class SyncCore
         var partition = DiscoverSubtrees(targetPath, parallelism * 2, cancellationToken);
         foreach (var rootFile in partition.RootFiles)
         {
-            existingTargetFiles.Add(rootFile);
+            existingTargetFiles.Add(rootFile.Path);
         }
 
         if (partition.Subtrees.Count > 0 && !cancellationToken.IsCancellationRequested)
@@ -371,12 +381,12 @@ public static class SyncCore
 
         foreach (var rootFile in partition.RootFiles)
         {
-            if (!existingTargetFiles.Contains(rootFile))
+            if (!existingTargetFiles.Contains(rootFile.Path))
             {
                 syncJobList.Add(new SyncJob
                 {
-                    SongPath = rootFile,
-                    FileSizeBytes = 0,
+                    SongPath = rootFile.Path,
+                    FileSizeBytes = rootFile.Size,
                     PercentageComplete = 0f
                 });
             }
@@ -418,54 +428,6 @@ public static class SyncCore
             len++;
         }
         return len;
-    }
-    
-    public static async Task<DiffResult> CalculateDiffSizesAsync(
-        AppState appState,
-        DiffResult diffResult,
-        CancellationToken cancellationToken = default)
-    {
-        if (!diffResult.IsValid())
-            return diffResult;
-
-        var jobs = diffResult.Jobs;
-        long totalBytes = 0;
-        var parallelOptions = new ParallelOptions
-        {
-            CancellationToken = cancellationToken,
-            MaxDegreeOfParallelism = Math.Clamp(appState.ScanStreamCount, 1, MaxScanStreams)
-        };
-
-        try
-        {
-            await Parallel.ForEachAsync(Enumerable.Range(0, jobs.Count), parallelOptions, (index, ct) =>
-            {
-                var job = jobs[index];
-                string fullPath = Path.Combine(appState.SourcePath, job.SongPath);
-                try
-                {
-                    var fileInfo = new FileInfo(fullPath);
-                    if (fileInfo.Exists)
-                    {
-                        job.FileSizeBytes = fileInfo.Length;
-                        jobs[index] = job;
-                        Interlocked.Add(ref totalBytes, job.FileSizeBytes);
-                    }
-                }
-                catch
-                {
-                    // Ignore inaccessible or deleted file
-                }
-
-                return ValueTask.CompletedTask;
-            });
-
-            return diffResult with { TotalDiffBytes = totalBytes };
-        }
-        catch (OperationCanceledException)
-        {
-            return diffResult;
-        }
     }
 
     // Lol, SyncAsync...
