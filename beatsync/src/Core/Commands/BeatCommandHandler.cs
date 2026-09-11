@@ -44,12 +44,6 @@ public class BeatCommandHandler
         {
             switch (command.Type)
             {
-                case CommandType.MountSourceDirectory:
-                    HandleMountSourceDirectory(command);
-                    break;
-                case CommandType.MountTargetDirectory:
-                    HandleMountTargetDirectory(command);
-                    break;
                 case CommandType.CalculateDiff:
                     HandleCalculateDiff(command);
                     break;
@@ -62,24 +56,8 @@ public class BeatCommandHandler
                 case CommandType.Cancel:
                     HandleCancel(command);
                     break;
-                case CommandType.SetScanStreams:
-                    HandleSetScanStreams(command);
-                    break;
-                case CommandType.SetTransferStreams:
-                    HandleSetTransferStreams(command);
-                    break;
             }
         }
-    }
-
-    private void HandleMountSourceDirectory(BeatCommand command)
-    {
-        AppState.SourcePath = command.Path ?? "";
-    }
-
-    private void HandleMountTargetDirectory(BeatCommand command)
-    {
-        AppState.TargetPath = command.Path ?? "";
     }
 
     private void HandleCalculateDiff(BeatCommand command)
@@ -199,15 +177,5 @@ public class BeatCommandHandler
     {
         _isManualCancel = true;
         _activeOpCancelTokenSource?.Cancel();
-    }
-
-    private void HandleSetScanStreams(BeatCommand command)
-    {
-        AppState.ScanStreamCount = command.StreamCount;
-    }
-
-    private void HandleSetTransferStreams(BeatCommand command)
-    {
-        AppState.TransferStreamCount = command.StreamCount;
     }
 }

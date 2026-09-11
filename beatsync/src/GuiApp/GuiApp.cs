@@ -16,37 +16,33 @@ public static class GuiApp
     
     // Constants
     private const int MaxDirectoryLength = 1024;
-    private static readonly Vector4 _goodColor = new Vector4(0.4f, 0.8f, 0.4f, 1f);
-    private static readonly Vector4 _warningColor = new Vector4(0.9f, 0.7f, 0.2f, 1f);
-    private static readonly Vector4 _errorColor = new Vector4(0.9f, 0.4f, 0.4f, 1f);
+    private static readonly Vector4 _goodColor = new(0.4f, 0.8f, 0.4f, 1f);
+    private static readonly Vector4 _warningColor = new(0.9f, 0.7f, 0.2f, 1f);
+    private static readonly Vector4 _errorColor = new(0.9f, 0.4f, 0.4f, 1f);
 
-    
     private static readonly string[] _spinnerFrames = [".  ", ".. ", "..."];
     private const float AnimationSpeed = 3f;
-    
+
     // Command handler
-    private static BeatCommandHandler _handler = new();
-    
-    // Transient State
-    private static bool _isBrowsingSource;
-    private static bool _isBrowsingTarget;
-    private static DiffResult _cachedDiffResult;
+    private static readonly BeatCommandHandler _handler = new();
+
+    // UI State
     private static GuiStateType _guiStateType = GuiStateType.Idle;
-    private static SyncProgressReport _lastSyncProgressReport;
+    private static DiffResult _cachedDiffResult;
+    private static bool _diffTimedOut;
     private static string? _lastErrorMessage;
     private static string? _lastInfoMessage;
-    private static string _tempSourcePath = "";
-    private static string _tempTargetPath = "";
-    private static int _tempScanStreamCount = 6;
-    private static int _tempTransferStreamCount = 4;
-    private static bool _diffTimedOut;
-    
+
+    // Async folder picker task (polled on main thread)
+    private static Task<string>? _activeFolderPicker;
+    private static Action<string>? _onFolderPicked;
+
     public static void Run(bool isDryRun)
     {
         Raylib.SetConfigFlags(ConfigFlags.HighDpiWindow | ConfigFlags.VSyncHint | ConfigFlags.ResizableWindow);
         Raylib.InitWindow(850, 480, "Beat Sync");
 
-        rlImGui.Setup(true, false); // sets up ImGui with ether a dark or light default theme
+        rlImGui.Setup(true, false);
 
         var saveFile = Path.Combine(GetOrCreateWritableDirectory(), "SaveState.bsyn");
 
@@ -55,17 +51,12 @@ public static class GuiApp
 
         if (_handler.AppState.IsValid())
         {
-            _guiStateType = GuiStateType.CalculatingDiff;
-            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
+            StartDiff(timeoutMs: 100);
         }
 
-        _tempSourcePath = _handler.AppState.SourcePath;
-        _tempTargetPath = _handler.AppState.TargetPath;
-        _tempScanStreamCount = _handler.AppState.ScanStreamCount;
-        _tempTransferStreamCount = _handler.AppState.TransferStreamCount;
-        
         while (!Raylib.WindowShouldClose())
         {
+            PollFolderPicker();
             Raylib.BeginDrawing();
             Raylib.ClearBackground(new Color(0, 0, 0, 1));
 
@@ -90,118 +81,15 @@ public static class GuiApp
 
             if (isWindowOpen)
             {
-                if (!string.IsNullOrWhiteSpace(_lastErrorMessage))
-                {
-                    ImGui.TextColored(_errorColor, $"{_lastErrorMessage}");
-                
-                    ImGui.Spacing();
-                    ImGui.Separator();
-                    ImGui.Spacing();
-                }
-                
-                if (!string.IsNullOrWhiteSpace(_lastInfoMessage))
-                {
-                    ImGui.TextWrapped($"{_lastInfoMessage}");
-                
-                    ImGui.Spacing();
-                    ImGui.Separator();
-                    ImGui.Spacing();
-                }
-                
+                DrawStatusBanners();
+
                 DrawMainWidgets();
-                
+
                 ImGui.Spacing();
                 ImGui.Separator();
                 ImGui.Spacing();
 
-                if (_guiStateType == GuiStateType.Syncing)
-                {
-                    if (ImGui.Button("Cancel"))
-                    {
-                        _handler.Submit(new BeatCommand { Type = CommandType.Cancel });
-                    }
-
-                    float progressFraction = _lastSyncProgressReport.TotalBytes > 0
-                        ? _lastSyncProgressReport.ByteFraction
-                        : _lastSyncProgressReport.Fraction;
-
-                    int progressPercent = _lastSyncProgressReport.TotalBytes > 0
-                        ? _lastSyncProgressReport.BytePercent
-                        : _lastSyncProgressReport.Percent;
-
-                    string bytesTransferred = SyncProgressReport.FormatBytes(_lastSyncProgressReport.BytesTransferred);
-                    string totalBytes = SyncProgressReport.FormatBytes(_lastSyncProgressReport.TotalBytes);
-                    
-                    ImGui.Text($"{_lastSyncProgressReport.CompletedCount}/{_lastSyncProgressReport.TotalCount} tracks ({bytesTransferred} / {totalBytes}) | {progressPercent}%");
-
-                    float screenWidth = ImGui.GetWindowViewport().WorkSize.X;
-                    float progressWidth = Math.Clamp(screenWidth * .75f, 100f, 600);
-                    
-                    ImGui.ProgressBar(progressFraction, new Vector2(progressWidth, 30f));
-                    ImGui.Text($"{_lastSyncProgressReport.CurrentPath}");
-                }
-                else if (_guiStateType == GuiStateType.CalculatingDiff)
-                {
-                    if (ImGui.Button("Cancel##Diff"))
-                    {
-                        _handler.Submit(new BeatCommand { Type = CommandType.Cancel });
-                    }
-                    ImGui.SameLine();
-
-                    int frameIndex = (int)(Raylib.GetTime() * AnimationSpeed) % _spinnerFrames.Length;
-                    ImGui.TextColored(_warningColor, $"Scanning library for changes{_spinnerFrames[frameIndex]}");
-                }
-                else
-                {
-                    ImGui.Checkbox("Dry Run", ref _handler.AppState.IsDryRun);
-                    ImGui.SameLine();
-
-                    if (_handler.AppState.IsValid())
-                    {
-                        if (ImGui.Button("Calculate Diff"))
-                        {
-                            _guiStateType = GuiStateType.CalculatingDiff;
-                            _diffTimedOut = false;
-                            
-                            ClearMessages();
-                            
-                            _handler.Submit(new BeatCommand
-                            {
-                                Type = CommandType.CalculateDiff,
-                                TimeoutMs = 0
-                            });
-                        }
-                    }
-
-                    if (_cachedDiffResult.IsValid())
-                    {
-                        ImGui.SameLine();
-                        
-                        string syncButtonLabel = _cachedDiffResult.HasSize()
-                            ? $"Sync {_cachedDiffResult.Jobs.Count} tracks ({SyncProgressReport.FormatBytes(_cachedDiffResult.TotalDiffBytes)})"
-                            : $"Sync {_cachedDiffResult.Jobs.Count} tracks";
-
-                        if (ImGui.Button(syncButtonLabel))
-                        {
-                            _guiStateType = GuiStateType.Syncing;
-                            _lastSyncProgressReport = default;
-                            
-                            ClearMessages();
-                            
-                            _handler.Submit(new BeatCommand
-                            {
-                                Type = CommandType.SyncLibrary,
-                                DiffResult =  _cachedDiffResult,
-                            });
-                        }
-                    }
-
-                    if (_diffTimedOut)
-                    {
-                        ImGui.Spacing();
-                        ImGui.TextColored(_warningColor, "! Large library detected (auto-scan timed out >100ms). Click 'Calculate Diff' to perform full scan.");
-                    }
-                }
+                DrawActionArea();
             }
 
             ImGui.End();
@@ -238,20 +126,13 @@ public static class GuiApp
                     break;
             }
 
-            if (!string.IsNullOrEmpty(result.ErrorMessage))
+            if (!string.IsNullOrEmpty(result.ErrorMessage) && !result.IsTimedOut)
             {
                 _lastErrorMessage = result.ErrorMessage;
                 Console.WriteLine(_lastErrorMessage);
             }
         }
-        
-        // Read progress from handler (written by background sync task)
-        if (_guiStateType == GuiStateType.Syncing)
-        {
-            _lastSyncProgressReport = _handler.LatestProgress;
-        }
     }
-    
 
     private static void HandleCalculateDiffResult(BeatCommandResult result)
     {
@@ -307,20 +188,30 @@ public static class GuiApp
         _lastErrorMessage = null;
     }
 
-    private static void PickDirectoryAsync(string initialPath, string prompt, Action<string?> onComplete)
+    private static void PollFolderPicker()
     {
-        Task.Run(() =>
+        if (_activeFolderPicker is { IsCompleted: true } task)
         {
-            string? selected = null;
-            try
+            var selected = task.Result;
+            var callback = _onFolderPicked;
+
+            _activeFolderPicker = null;
+            _onFolderPicked = null;
+
+            if (!string.IsNullOrWhiteSpace(selected))
             {
-                selected = FolderDialog.PickFolder(prompt, initialPath);
+                callback?.Invoke(selected);
             }
-            finally
-            {
-                onComplete?.Invoke(selected);
-            }
-        });
+        }
+    }
+
+    private static void PickDirectoryAsync(string initialPath, string prompt, Action<string> onComplete)
+    {
+        if (_activeFolderPicker is not null && !_activeFolderPicker.IsCompleted)
+            return;
+
+        _onFolderPicked = onComplete;
+        _activeFolderPicker = Task.Run(() => FolderDialog.PickFolder(prompt, initialPath));
     }
 
     private static void SaveAppState(string saveFile, AppState appState)
@@ -334,18 +225,24 @@ public static class GuiApp
         if (!File.Exists(loadFile))
             return new AppState();
         
-        
-        var appStateBlob = File.ReadAllBytes(loadFile);
-        var appState = AppState.Deserialize(appStateBlob);
-
-        // if loaded app state is invalid, create a new one
-        if (appState.Version <= 0 || appState.TargetPath == null || appState.SourcePath == null)
+        try
         {
-            Console.WriteLine("Loaded app state is malformed, reverting to default");
-            appState = new();
+            var appStateBlob = File.ReadAllBytes(loadFile);
+            var appState = AppState.Deserialize(appStateBlob);
+
+            if (appState.Version <= 0 || appState.TargetPath == null || appState.SourcePath == null)
+            {
+                Console.WriteLine("Loaded app state is malformed, reverting to default");
+                return new AppState();
+            }
+            
+            return appState;
         }
-        
-        return appState;
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to load app state: {ex.Message}");
+            return new AppState();
+        }
     }
     
     private static string GetOrCreateWritableDirectory()
@@ -357,158 +254,261 @@ public static class GuiApp
         return appFolder;
     }
 
+    private static void DrawStatusBanners()
+    {
+        if (!string.IsNullOrWhiteSpace(_lastErrorMessage))
+        {
+            ImGui.TextColored(_errorColor, _lastErrorMessage);
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+        }
+
+        if (!string.IsNullOrWhiteSpace(_lastInfoMessage))
+        {
+            ImGui.TextWrapped(_lastInfoMessage);
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+        }
+    }
+
     private static void DrawMainWidgets()
     {
         bool areWidgetsDisabled = _guiStateType != GuiStateType.Idle;
-        
+
         if (areWidgetsDisabled)
             ImGui.BeginDisabled();
 
+        DrawStreamSettings();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        DrawPathSelector(
+            "Source Directory:",
+            "Source",
+            ref _handler.AppState.SourcePath,
+            "Select Source Directory",
+            "✗ Directory not found",
+            _errorColor,
+            selected => _handler.AppState.SourcePath = selected);
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        DrawPathSelector(
+            "Target Directory:",
+            "Target",
+            ref _handler.AppState.TargetPath,
+            "Select Target Directory",
+            "! Directory will be created upon sync",
+            _warningColor,
+            selected => _handler.AppState.TargetPath = selected);
+
+        if (areWidgetsDisabled)
+            ImGui.EndDisabled();
+    }
+
+    private static void DrawStreamSettings()
+    {
         ImGui.Text("Scan Streams (Diff / Size):");
         ImGui.SetNextItemWidth(100);
-        if (ImGui.DragInt("##ScanStreamCount", ref _tempScanStreamCount, 1f, 1, SyncCore.MaxScanStreams))
-        {
-            _handler.Submit(new BeatCommand
-            {
-                Type = CommandType.SetScanStreams,
-                StreamCount = _tempScanStreamCount,
-            });
-        }
+        ImGui.DragInt("##ScanStreamCount", ref _handler.AppState.ScanStreamCount, 1f, 1, SyncCore.MaxScanStreams);
         ImGui.SameLine();
         ImGui.TextDisabled("(1-12, overlaps NAS network latency)");
 
         ImGui.Text("Transfer Streams (Copy):");
         ImGui.SetNextItemWidth(100);
-        if (ImGui.DragInt("##TransferStreamCount", ref _tempTransferStreamCount, 1f, 1, SyncCore.MaxTransferStreams))
-        {
-            _handler.Submit(new BeatCommand
-            {
-                Type = CommandType.SetTransferStreams,
-                StreamCount = _tempTransferStreamCount,
-            });
-        }
+        ImGui.DragInt("##TransferStreamCount", ref _handler.AppState.TransferStreamCount, 1f, 1, SyncCore.MaxTransferStreams);
         ImGui.SameLine();
         ImGui.TextDisabled("(1-6, prevents HDD head thrashing & SD card write stalls)");
-                
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-                
-        ImGui.Text("Source Directory:");
+    }
+
+    private static void DrawPathSelector(
+        string label,
+        string id,
+        ref string path,
+        string browsePrompt,
+        string notFoundMessage,
+        Vector4 notFoundColor,
+        Action<string> onSelected)
+    {
+        ImGui.Text(label);
         ImGui.SetNextItemWidth(450);
-                
-        if (ImGui.InputText("##SourcePath", ref _tempSourcePath, MaxDirectoryLength))
+
+        if (ImGui.InputText($"##{id}Path", ref path, MaxDirectoryLength))
         {
-            _handler.Submit(new BeatCommand
-            {
-                Type = CommandType.MountSourceDirectory,
-                Path = _tempSourcePath
-            });
+            InvalidateDiff();
         }
-                
+
         ImGui.SameLine();
-        if (_isBrowsingSource)
+
+        bool isBrowsing = _activeFolderPicker is { IsCompleted: false };
+        if (isBrowsing)
         {
             ImGui.BeginDisabled();
-            ImGui.Button("Browsing...##Source");
+            ImGui.Button($"Browsing...##{id}");
             ImGui.EndDisabled();
         }
-        else
+        else if (ImGui.Button($"Browse...##{id}"))
         {
-            if (ImGui.Button("Browse...##Source"))
+            var currentPath = path;
+            PickDirectoryAsync(currentPath, browsePrompt, selected =>
             {
-                _isBrowsingSource = true;
-                        
-                PickDirectoryAsync(_handler.AppState.SourcePath, "Select Source Directory", (selected) =>
+                onSelected(selected);
+                InvalidateDiff();
+                if (_handler.AppState.IsValid())
                 {
-                    _guiStateType = GuiStateType.CalculatingDiff;
-                    
-                    _isBrowsingSource = false;
-                    _tempSourcePath = selected;
-                            
-                    _handler.Submit(new BeatCommand
-                    {
-                        Type = CommandType.MountSourceDirectory,
-                        Path = selected,
-                    });
-                            
-                    _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
-                });
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(_handler.AppState.SourcePath))
-        {
-            if (Directory.Exists(_handler.AppState.SourcePath))
-            {
-                ImGui.TextColored(_goodColor, "* Directory exists");
-            }
-            else
-            {
-                ImGui.TextColored(_errorColor, "✗ Directory not found");
-            }
-        }
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        ImGui.Text("Target Directory:");
-        ImGui.SetNextItemWidth(450);
-        if (ImGui.InputText("##TargetPath", ref _tempTargetPath, MaxDirectoryLength))
-        {
-            _handler.Submit(new BeatCommand
-            {
-                Type = CommandType.MountTargetDirectory,
-                Path = _tempTargetPath
+                    StartDiff(timeoutMs: 100);
+                }
             });
         }
-        ImGui.SameLine();
-                
-        if (_isBrowsingTarget)
-        {
-            ImGui.BeginDisabled();
-            ImGui.Button("Browsing...##Target");
-            ImGui.EndDisabled();
-        }
-        else
-        {
-            if (ImGui.Button("Browse...##Target"))
-            {
-                _isBrowsingTarget = true;
-                        
-                PickDirectoryAsync(_handler.AppState.TargetPath, "Select Target Directory", (selected) =>
-                {
-                    _guiStateType = GuiStateType.CalculatingDiff;
-                    
-                    _isBrowsingTarget = false;
-                    _tempTargetPath = selected;
-                            
-                    _handler.Submit(new BeatCommand
-                    {
-                        Type = CommandType.MountTargetDirectory,
-                        Path = selected,
-                    });
-                                
-                    _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
-                });
-            }
-        }
 
-        if (!string.IsNullOrWhiteSpace(_handler.AppState.TargetPath))
+        if (!string.IsNullOrWhiteSpace(path))
         {
-            if (Directory.Exists(_handler.AppState.TargetPath))
+            if (Directory.Exists(path))
             {
                 ImGui.TextColored(_goodColor, "✓ Directory exists");
             }
             else
             {
-                ImGui.TextColored(_warningColor, "! Directory will be created upon sync");
+                ImGui.TextColored(notFoundColor, notFoundMessage);
             }
         }
-                
-        if (areWidgetsDisabled)
-            ImGui.EndDisabled();
+    }
+
+    private static void DrawActionArea()
+    {
+        switch (_guiStateType)
+        {
+            case GuiStateType.Syncing:
+                DrawSyncingState();
+                break;
+            case GuiStateType.CalculatingDiff:
+                DrawScanningState();
+                break;
+            default:
+                DrawIdleActions();
+                break;
+        }
+    }
+
+    private static void DrawSyncingState()
+    {
+        if (ImGui.Button("Cancel"))
+        {
+            CancelOperation();
+        }
+
+        var progress = _handler.LatestProgress;
+
+        float progressFraction = progress.TotalBytes > 0
+            ? progress.ByteFraction
+            : progress.Fraction;
+
+        int progressPercent = progress.TotalBytes > 0
+            ? progress.BytePercent
+            : progress.Percent;
+
+        string bytesTransferred = SyncProgressReport.FormatBytes(progress.BytesTransferred);
+        string totalBytes = SyncProgressReport.FormatBytes(progress.TotalBytes);
+
+        ImGui.Text($"{progress.CompletedCount}/{progress.TotalCount} tracks ({bytesTransferred} / {totalBytes}) | {progressPercent}%");
+
+        float screenWidth = ImGui.GetWindowViewport().WorkSize.X;
+        float progressWidth = Math.Clamp(screenWidth * 0.75f, 100f, 600f);
+
+        ImGui.ProgressBar(progressFraction, new Vector2(progressWidth, 30f));
+        ImGui.Text(progress.CurrentPath ?? "");
+    }
+
+    private static void DrawScanningState()
+    {
+        if (ImGui.Button("Cancel##Diff"))
+        {
+            CancelOperation();
+        }
+        ImGui.SameLine();
+
+        int frameIndex = (int)(Raylib.GetTime() * AnimationSpeed) % _spinnerFrames.Length;
+        ImGui.TextColored(_warningColor, $"Scanning library for changes{_spinnerFrames[frameIndex]}");
+    }
+
+    private static void DrawIdleActions()
+    {
+        ImGui.Checkbox("Dry Run", ref _handler.AppState.IsDryRun);
+        ImGui.SameLine();
+
+        if (_handler.AppState.IsValid())
+        {
+            if (ImGui.Button("Calculate Diff"))
+            {
+                StartDiff(timeoutMs: 0);
+            }
+        }
+
+        if (_cachedDiffResult.IsValid())
+        {
+            ImGui.SameLine();
+
+            string syncButtonLabel = _cachedDiffResult.HasSize()
+                ? $"Sync {_cachedDiffResult.Jobs.Count} tracks ({SyncProgressReport.FormatBytes(_cachedDiffResult.TotalDiffBytes)})"
+                : $"Sync {_cachedDiffResult.Jobs.Count} tracks";
+
+            if (ImGui.Button(syncButtonLabel))
+            {
+                StartSync();
+            }
+        }
+
+        if (_diffTimedOut)
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(_warningColor, "! Large library detected (auto-scan timed out >100ms). Click 'Calculate Diff' to perform full scan.");
+        }
+    }
+
+    private static void StartDiff(int timeoutMs)
+    {
+        _guiStateType = GuiStateType.CalculatingDiff;
+        _diffTimedOut = false;
+        ClearMessages();
+
+        _handler.Submit(new BeatCommand
+        {
+            Type = CommandType.CalculateDiff,
+            TimeoutMs = timeoutMs
+        });
+    }
+
+    private static void StartSync()
+    {
+        _guiStateType = GuiStateType.Syncing;
+        ClearMessages();
+
+        _handler.Submit(new BeatCommand
+        {
+            Type = CommandType.SyncLibrary,
+            DiffResult = _cachedDiffResult,
+        });
+    }
+
+    private static void CancelOperation()
+    {
+        _handler.Submit(new BeatCommand
+        {
+            Type = CommandType.Cancel
+        });
+    }
+
+    private static void InvalidateDiff()
+    {
+        _cachedDiffResult = default;
+        _diffTimedOut = false;
+        ClearMessages();
     }
 
     private static void ClearMessages()
