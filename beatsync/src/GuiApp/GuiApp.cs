@@ -72,19 +72,6 @@ public static class GuiApp
 
             rlImGui.Begin();			// starts the ImGui content mode. Make all ImGui calls after this
 
-            // if (ImGui.BeginMainMenuBar()) {
-            //     if (ImGui.BeginMenu("File")) {
-            //         ImGui.MenuItem("New", "Ctrl+N");
-            //         ImGui.MenuItem("Open", "Ctrl+O");
-            //         ImGui.EndMenu();
-            //     }
-            //     if (ImGui.BeginMenu("Edit")) {
-            //         ImGui.MenuItem("Open", "Ctrl+O");
-            //         ImGui.EndMenu();
-            //     }
-            //     ImGui.EndMainMenuBar();
-            // }
-
             var viewport = ImGui.GetMainViewport();
             ImGui.SetNextWindowPos(viewport.WorkPos);
             ImGui.SetNextWindowSize(viewport.WorkSize);
@@ -122,135 +109,7 @@ public static class GuiApp
                     ImGui.Spacing();
                 }
                 
-                if (_guiStateType != GuiStateType.Idle)
-                    ImGui.BeginDisabled();
-
-                ImGui.Text("Sync Stream Count");
-                ImGui.SetNextItemWidth(100);
-                if (ImGui.DragInt("##SyncStreamCount", ref _tempSyncStreamCount, 1f, 1, SyncCore.MaxSyncStreams))
-                {
-                    _handler.Submit(new BeatCommand
-                    {
-                        Type = CommandType.SetMaxParallelStreams,
-                        StreamCount = _tempSyncStreamCount,
-                    });
-                }
-                
-                ImGui.Spacing();
-                ImGui.Separator();
-                ImGui.Spacing();
-                
-                ImGui.Text("Source Directory:");
-                ImGui.SetNextItemWidth(450);
-                
-                if (ImGui.InputText("##SourcePath", ref _tempSourcePath, MaxDirectoryLength))
-                {
-                    _handler.Submit(new BeatCommand
-                    {
-                        Type = CommandType.MountSourceDirectory,
-                        Path = _tempSourcePath
-                    });
-                }
-                
-                ImGui.SameLine();
-                if (_isBrowsingSource)
-                {
-                    ImGui.BeginDisabled();
-                    ImGui.Button("Browsing...##Source");
-                    ImGui.EndDisabled();
-                }
-                else
-                {
-                    if (ImGui.Button("Browse...##Source"))
-                    {
-                        _isBrowsingSource = true;
-                        
-                        PickDirectoryAsync(_handler.AppState.SourcePath, "Select Source Directory", (selected) =>
-                        {
-                            _isBrowsingSource = false;
-                            
-                            _handler.Submit(new BeatCommand
-                            {
-                                Type = CommandType.MountSourceDirectory,
-                                Path = selected,
-                            });
-                            
-                            _guiStateType = GuiStateType.CalculatingDiff;
-                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
-                        });
-                    }
-                }
-
-                if (!string.IsNullOrWhiteSpace(_handler.AppState.SourcePath))
-                {
-                    if (Directory.Exists(_handler.AppState.SourcePath))
-                    {
-                        ImGui.TextColored(_goodColor, "* Directory exists");
-                    }
-                    else
-                    {
-                        ImGui.TextColored(_errorColor, "✗ Directory not found");
-                    }
-                }
-
-                ImGui.Spacing();
-                ImGui.Separator();
-                ImGui.Spacing();
-
-                ImGui.Text("Target Directory:");
-                ImGui.SetNextItemWidth(450);
-                if (ImGui.InputText("##TargetPath", ref _tempTargetPath, MaxDirectoryLength))
-                {
-                    _handler.Submit(new BeatCommand
-                    {
-                        Type = CommandType.MountTargetDirectory,
-                        Path = _tempTargetPath
-                    });
-                }
-                ImGui.SameLine();
-                
-                if (_isBrowsingTarget)
-                {
-                    ImGui.BeginDisabled();
-                    ImGui.Button("Browsing...##Target");
-                    ImGui.EndDisabled();
-                }
-                else
-                {
-                    if (ImGui.Button("Browse...##Target"))
-                    {
-                        _isBrowsingTarget = true;
-                        
-                        PickDirectoryAsync(_handler.AppState.TargetPath, "Select Target Directory", (selected) =>
-                        {
-                            _isBrowsingTarget = false;
-                            
-                            _handler.Submit(new BeatCommand
-                            {
-                                Type = CommandType.MountTargetDirectory,
-                                Path = selected,
-                            });
-                                
-                            _guiStateType = GuiStateType.CalculatingDiff;
-                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
-                        });
-                    }
-                }
-
-                if (!string.IsNullOrWhiteSpace(_handler.AppState.TargetPath))
-                {
-                    if (Directory.Exists(_handler.AppState.TargetPath))
-                    {
-                        ImGui.TextColored(_goodColor, "✓ Directory exists");
-                    }
-                    else
-                    {
-                        ImGui.TextColored(_warningColor, "! Directory will be created upon sync");
-                    }
-                }
-                
-                if (_guiStateType != GuiStateType.Idle)
-                    ImGui.EndDisabled();
+                DrawMainWidgets();
                 
                 ImGui.Spacing();
                 ImGui.Separator();
@@ -479,5 +338,140 @@ public static class GuiApp
         Directory.CreateDirectory(appFolder);
 
         return appFolder;
+    }
+
+    private static void DrawMainWidgets()
+    {
+        bool areWidgetsDisabled = _guiStateType != GuiStateType.Idle;
+        
+        if (areWidgetsDisabled)
+            ImGui.BeginDisabled();
+
+        ImGui.Text("Sync Stream Count");
+        ImGui.SetNextItemWidth(100);
+        if (ImGui.DragInt("##SyncStreamCount", ref _tempSyncStreamCount, 1f, 1, SyncCore.MaxSyncStreams))
+        {
+            _handler.Submit(new BeatCommand
+            {
+                Type = CommandType.SetMaxParallelStreams,
+                StreamCount = _tempSyncStreamCount,
+            });
+        }
+                
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+                
+        ImGui.Text("Source Directory:");
+        ImGui.SetNextItemWidth(450);
+                
+        if (ImGui.InputText("##SourcePath", ref _tempSourcePath, MaxDirectoryLength))
+        {
+            _handler.Submit(new BeatCommand
+            {
+                Type = CommandType.MountSourceDirectory,
+                Path = _tempSourcePath
+            });
+        }
+                
+        ImGui.SameLine();
+        if (_isBrowsingSource)
+        {
+            ImGui.BeginDisabled();
+            ImGui.Button("Browsing...##Source");
+            ImGui.EndDisabled();
+        }
+        else
+        {
+            if (ImGui.Button("Browse...##Source"))
+            {
+                _isBrowsingSource = true;
+                        
+                PickDirectoryAsync(_handler.AppState.SourcePath, "Select Source Directory", (selected) =>
+                {
+                    _isBrowsingSource = false;
+                            
+                    _handler.Submit(new BeatCommand
+                    {
+                        Type = CommandType.MountSourceDirectory,
+                        Path = selected,
+                    });
+                            
+                    _guiStateType = GuiStateType.CalculatingDiff;
+                    _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
+                });
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_handler.AppState.SourcePath))
+        {
+            if (Directory.Exists(_handler.AppState.SourcePath))
+            {
+                ImGui.TextColored(_goodColor, "* Directory exists");
+            }
+            else
+            {
+                ImGui.TextColored(_errorColor, "✗ Directory not found");
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        ImGui.Text("Target Directory:");
+        ImGui.SetNextItemWidth(450);
+        if (ImGui.InputText("##TargetPath", ref _tempTargetPath, MaxDirectoryLength))
+        {
+            _handler.Submit(new BeatCommand
+            {
+                Type = CommandType.MountTargetDirectory,
+                Path = _tempTargetPath
+            });
+        }
+        ImGui.SameLine();
+                
+        if (_isBrowsingTarget)
+        {
+            ImGui.BeginDisabled();
+            ImGui.Button("Browsing...##Target");
+            ImGui.EndDisabled();
+        }
+        else
+        {
+            if (ImGui.Button("Browse...##Target"))
+            {
+                _isBrowsingTarget = true;
+                        
+                PickDirectoryAsync(_handler.AppState.TargetPath, "Select Target Directory", (selected) =>
+                {
+                    _isBrowsingTarget = false;
+                            
+                    _handler.Submit(new BeatCommand
+                    {
+                        Type = CommandType.MountTargetDirectory,
+                        Path = selected,
+                    });
+                                
+                    _guiStateType = GuiStateType.CalculatingDiff;
+                    _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
+                });
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(_handler.AppState.TargetPath))
+        {
+            if (Directory.Exists(_handler.AppState.TargetPath))
+            {
+                ImGui.TextColored(_goodColor, "✓ Directory exists");
+            }
+            else
+            {
+                ImGui.TextColored(_warningColor, "! Directory will be created upon sync");
+            }
+        }
+                
+        if (areWidgetsDisabled)
+            ImGui.EndDisabled();
     }
 }
