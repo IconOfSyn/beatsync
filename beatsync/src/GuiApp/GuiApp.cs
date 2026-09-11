@@ -64,9 +64,6 @@ public static class GuiApp
         
         while (!Raylib.WindowShouldClose())
         {
-            _handler.ProcessCommands();
-            DrainResults();
-            
             Raylib.BeginDrawing();
             Raylib.ClearBackground(new Color(0, 0, 0, 1));
 
@@ -134,7 +131,11 @@ public static class GuiApp
                     string totalBytes = SyncProgressReport.FormatBytes(_lastSyncProgressReport.TotalBytes);
                     
                     ImGui.Text($"{_lastSyncProgressReport.CompletedCount}/{_lastSyncProgressReport.TotalCount} tracks ({bytesTransferred} / {totalBytes}) | {progressPercent}%");
-                    ImGui.ProgressBar(progressFraction, new Vector2(ImGui.GetWindowViewport().WorkSize.X, 30f));
+
+                    float screenWidth = ImGui.GetWindowViewport().WorkSize.X;
+                    float progressWidth = Math.Clamp(screenWidth * .75f, 100f, 600);
+                    
+                    ImGui.ProgressBar(progressFraction, new Vector2(progressWidth, 30f));
                     ImGui.Text($"{_lastSyncProgressReport.CurrentPath}");
                 }
                 else if (_guiStateType == GuiStateType.CalculatingDiff)
@@ -159,7 +160,14 @@ public static class GuiApp
                         {
                             _guiStateType = GuiStateType.CalculatingDiff;
                             _diffTimedOut = false;
-                            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 0 });
+                            
+                            ClearMessages();
+                            
+                            _handler.Submit(new BeatCommand
+                            {
+                                Type = CommandType.CalculateDiff,
+                                TimeoutMs = 0
+                            });
                         }
                     }
 
@@ -175,6 +183,8 @@ public static class GuiApp
                         {
                             _guiStateType = GuiStateType.Syncing;
                             _lastSyncProgressReport = default;
+                            
+                            ClearMessages();
                             
                             _handler.Submit(new BeatCommand
                             {
@@ -196,6 +206,11 @@ public static class GuiApp
 
             rlImGui.End();			// ends the ImGui content mode. Make all ImGui calls before this
             Raylib.EndDrawing();
+            
+            
+            // Handle Commands
+            _handler.ProcessCommands();
+            DrainResults();
         }
 
         rlImGui.Shutdown();		// cleans up ImGui
@@ -473,5 +488,11 @@ public static class GuiApp
                 
         if (areWidgetsDisabled)
             ImGui.EndDisabled();
+    }
+
+    private static void ClearMessages()
+    {
+        _lastErrorMessage = null;
+        _lastInfoMessage = null;
     }
 }

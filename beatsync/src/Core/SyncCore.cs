@@ -237,14 +237,6 @@ public static class SyncCore
         
         int completedCount = 0;
         long totalBytesToTransfer = diffResult.TotalDiffBytes;
-        
-        if (diffResult.IsValid() && !diffResult.HasSize())
-        {
-            diffResult = await CalculateDiffSizesAsync(appState, diffResult, cancellationToken);
-            syncJobList = diffResult.Jobs;
-            totalBytesToTransfer = diffResult.TotalDiffBytes;
-        }
-        
         long totalBytesTransferred = 0;
 
         var parallelOptions = new ParallelOptions
