@@ -7,6 +7,13 @@ namespace beatsync;
 
 public static class GuiApp
 {
+    private enum GuiStateType : byte
+    {
+        Idle,
+        CalculatingDiff,
+        Syncing
+    }
+    
     // Constants
     private const int MaxDirectoryLength = 1024;
     private static readonly Vector4 _goodColor = new Vector4(0.4f, 0.8f, 0.4f, 1f);
@@ -23,7 +30,7 @@ public static class GuiApp
     // Transient State
     private static bool _isBrowsingSource;
     private static bool _isBrowsingTarget;
-    private static List<SyncJob>? _syncDiffList;
+    private static DiffResult _cachedDiffResult;
     private static GuiStateType _guiStateType = GuiStateType.Idle;
     private static SyncProgressReport _lastSyncProgressReport;
     private static string? _lastErrorMessage;
@@ -241,7 +248,10 @@ public static class GuiApp
                         ? _lastSyncProgressReport.BytePercent
                         : _lastSyncProgressReport.Percent;
 
-                    ImGui.Text($"{_lastSyncProgressReport.CompletedCount}/{_lastSyncProgressReport.TotalCount} tracks ({SyncProgressReport.FormatBytes(_lastSyncProgressReport.BytesTransferred)} / {SyncProgressReport.FormatBytes(_lastSyncProgressReport.TotalBytes)}) | {progressPercent}%");
+                    string bytesTransferred = SyncProgressReport.FormatBytes(_lastSyncProgressReport.BytesTransferred);
+                    string totalBytes = SyncProgressReport.FormatBytes(_lastSyncProgressReport.TotalBytes);
+                    
+                    ImGui.Text($"{_lastSyncProgressReport.CompletedCount}/{_lastSyncProgressReport.TotalCount} tracks ({bytesTransferred} / {totalBytes}) | {progressPercent}%");
                     ImGui.ProgressBar(progressFraction, new Vector2(ImGui.GetWindowViewport().WorkSize.X, 30f));
                     ImGui.Text($"{_lastSyncProgressReport.CurrentPath}");
                 }
@@ -271,20 +281,22 @@ public static class GuiApp
                         }
                     }
 
-                    if (_syncDiffList is { Count: > 0 })
+                    if (_cachedDiffResult.Jobs is { Count: > 0 })
                     {
                         ImGui.SameLine();
-                        long totalDiffBytes = _syncDiffList.Sum(j => j.FileSizeBytes);
-                        string syncButtonLabel = totalDiffBytes > 0
-                            ? $"Sync {_syncDiffList.Count} tracks ({SyncProgressReport.FormatBytes(totalDiffBytes)})"
-                            : $"Sync {_syncDiffList.Count} tracks";
+                        
+                        string syncButtonLabel = _cachedDiffResult.TotalDiffBytes > 0
+                            ? $"Sync {_cachedDiffResult.Jobs.Count} tracks ({SyncProgressReport.FormatBytes(_cachedDiffResult.TotalDiffBytes)})"
+                            : $"Sync {_cachedDiffResult.Jobs.Count} tracks";
 
                         if (ImGui.Button(syncButtonLabel))
                         {
                             _guiStateType = GuiStateType.Syncing;
+                            
                             _handler.Submit(new BeatCommand
                             {
                                 Type = CommandType.SyncLibrary,
+                                DiffResult =  _cachedDiffResult,
                             });
                         }
                     }
@@ -316,40 +328,10 @@ public static class GuiApp
             switch (result.CommandType)
             {
                 case CommandType.CalculateDiff:
-                    _guiStateType = GuiStateType.Idle;
-                    if (result.ResultType == ResultType.Success)
-                    {
-                        _syncDiffList = result.DiffList;
-                        _diffTimedOut = false;
-                        _lastInfoMessage = $"Sync Track Count: {result.DiffList?.Count}";
-                        _lastErrorMessage = null;
-                    }
-                    else if (result.IsTimedOut)
-                    {
-                        _diffTimedOut = true;
-                        _syncDiffList = null;
-                        _lastInfoMessage = null;
-                        _lastErrorMessage = null;
-                    }
-                    else if (result.ResultType == ResultType.Cancelled)
-                    {
-                        _diffTimedOut = false;
-                        _lastInfoMessage = "Diff scan cancelled.";
-                        _lastErrorMessage = null;
-                    }
+                    HandleCalculateDiffResult(result);
                     break;
-                    
                 case CommandType.SyncLibrary:
-                    _guiStateType = GuiStateType.Idle;
-                    _lastInfoMessage = $"Completed Sync: {result.SyncResult}";
-                    Console.WriteLine(_lastInfoMessage);
-                    _lastErrorMessage = null;
-                    if (result.ResultType == ResultType.Success)
-                    {
-                        // Refresh diff automatically with 100ms timeout
-                        _guiStateType = GuiStateType.CalculatingDiff;
-                        _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
-                    }
+                    HandleSyncResult(result);
                     break;
             }
 
@@ -364,6 +346,49 @@ public static class GuiApp
         if (_guiStateType == GuiStateType.Syncing)
         {
             _lastSyncProgressReport = _handler.LatestProgress;
+        }
+    }
+
+    private static void HandleCalculateDiffResult(BeatCommandResult result)
+    {
+        _guiStateType = GuiStateType.Idle;
+                    
+        if (result.ResultType == ResultType.Success)
+        {
+            _cachedDiffResult = result.DiffResult;
+            _diffTimedOut = false;
+            _lastInfoMessage = $"Sync Track Count: {result.DiffResult.Jobs.Count} | {result.DiffResult.Elapsed}";
+            _lastErrorMessage = null;
+        }
+        else if (result.IsTimedOut)
+        {
+            _diffTimedOut = true;
+            _cachedDiffResult = default;
+            _lastInfoMessage = null;
+            _lastErrorMessage = null;
+        }
+        else if (result.ResultType == ResultType.Cancelled)
+        {
+            _diffTimedOut = false;
+            _lastInfoMessage = "Diff scan cancelled.";
+            _lastErrorMessage = null;
+        }
+    }
+
+    private static void HandleSyncResult(BeatCommandResult result)
+    {
+        _guiStateType = GuiStateType.Idle;
+                    
+        _lastInfoMessage = $"Completed Sync: {result.SyncResult}";
+        Console.WriteLine(_lastInfoMessage);
+                    
+        _lastErrorMessage = null;
+        
+        if (result.ResultType == ResultType.Success)
+        {
+            // Refresh diff automatically with 100ms timeout
+            _guiStateType = GuiStateType.CalculatingDiff;
+            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
         }
     }
 
@@ -415,12 +440,5 @@ public static class GuiApp
         Directory.CreateDirectory(appFolder);
 
         return appFolder;
-    }
-
-    public enum GuiStateType : byte
-    {
-        Idle,
-        CalculatingDiff,
-        Syncing
     }
 }

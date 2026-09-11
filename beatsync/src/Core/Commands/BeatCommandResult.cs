@@ -6,7 +6,7 @@ public record struct BeatCommandResult
     public CommandType CommandType;
     public ResultType ResultType;
     public string? ErrorMessage;
-    public List<SyncJob>? DiffList;
+    public DiffResult DiffResult;
     public SyncResult? SyncResult;
     public bool IsTimedOut;
 }

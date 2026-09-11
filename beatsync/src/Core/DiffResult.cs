@@ -2,8 +2,9 @@ namespace beatsync;
 
 public record struct DiffResult
 {
-    public ResultType ResultType;
-    public List<SyncJob> Jobs;
-    public string? ErrorMessage;
-
+    public ResultType ResultType { get; init; }
+    public TimeSpan Elapsed { get; init; }
+    public List<SyncJob> Jobs { get; init; }
+    public string? ErrorMessage { get; init; }
+    public long TotalDiffBytes { get; init; }
 }

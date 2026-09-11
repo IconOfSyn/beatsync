@@ -105,7 +105,7 @@ public class BeatCommandHandler
                 ErrorMessage = isTimedOut
                     ? "Auto-scan timed out (>100ms). Click 'Calculate Diff' to perform full scan."
                     : diffResult.ErrorMessage,
-                DiffList = diffResult.Jobs,
+                DiffResult = diffResult,
                 IsTimedOut = isTimedOut,
             };
         });

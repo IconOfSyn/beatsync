@@ -1,126 +1,152 @@
 using System.Diagnostics;
+using System.IO.Enumeration;
 
 namespace beatsync;
 
 public static class SyncCore
 {
-    public const int MaxSyncStreams = 20;
+    private const int MaxSyncStreams = 20;
     private const int DryRunJobDelayInMilliseconds = 80;
     
     public static async Task<DiffResult> BuildSyncList(AppState appState, CancellationToken cancellationToken = default)
     {
+        var stopwatch = Stopwatch.StartNew();
+        var resultType = ResultType.InProgress;
+        string? errorMessage = null;
+        List<SyncJob> jobs = [];
+
         if (string.IsNullOrWhiteSpace(appState.SourcePath) || !Directory.Exists(appState.SourcePath))
         {
-            return new DiffResult
-            {
-                ResultType = ResultType.Error,
-                Jobs = [],
-                ErrorMessage = $"Source directory does not exist or is invalid: '{appState.SourcePath}'"
-            };
+            resultType = ResultType.Error;
+            errorMessage = $"Source directory does not exist or is invalid: '{appState.SourcePath}'";
         }
-
-        if (string.IsNullOrWhiteSpace(appState.TargetPath))
+        else if (string.IsNullOrWhiteSpace(appState.TargetPath))
         {
-            return new DiffResult
-            {
-                ResultType = ResultType.Error,
-                Jobs = [],
-                ErrorMessage = $"Target directory path is invalid: '{appState.TargetPath}'"
-            };
+            resultType = ResultType.Error;
+            errorMessage = $"Target directory path is invalid: '{appState.TargetPath}'";
         }
-
-        if (cancellationToken.IsCancellationRequested)
+        else if (cancellationToken.IsCancellationRequested)
         {
-            return new DiffResult
-            {
-                ResultType = ResultType.Cancelled,
-                Jobs = [],
-            };
+            resultType = ResultType.Cancelled;
         }
-
-        try
+        else
         {
-            var jobs = await Task.Run(() =>
+            try
             {
-                var syncJobList = new List<SyncJob>();
-
-                var options = new EnumerationOptions
+                jobs = await Task.Run(() =>
                 {
-                    RecurseSubdirectories = true,
-                    IgnoreInaccessible = true,
-                    AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
-                };
+                    var options = new EnumerationOptions
+                    {
+                        RecurseSubdirectories = true,
+                        IgnoreInaccessible = true,
+                        AttributesToSkip = FileAttributes.Hidden | FileAttributes.System
+                    };
 
-                var existingTargetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                if (Directory.Exists(appState.TargetPath))
-                {
-                    foreach (var targetFile in Directory.EnumerateFiles(appState.TargetPath, "*", options))
+                    // 1. Enumerate Target Files into HashSet<string>
+                    var existingTargetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    if (Directory.Exists(appState.TargetPath))
+                    {
+                        int targetPrefixLen = GetPrefixLength(appState.TargetPath);
+
+                        var targetEnumerable = new FileSystemEnumerable<string>(
+                            appState.TargetPath,
+                            (ref FileSystemEntry entry) =>
+                            {
+                                ReadOnlySpan<char> relDir = entry.Directory.Length > targetPrefixLen
+                                    ? entry.Directory.Slice(targetPrefixLen)
+                                    : ReadOnlySpan<char>.Empty;
+
+                                return Path.Join(relDir, entry.FileName);
+                            },
+                            options)
+                        {
+                            ShouldIncludePredicate = (ref FileSystemEntry entry) => !entry.IsDirectory,
+                            ShouldRecursePredicate = (ref FileSystemEntry entry) => entry.IsDirectory
+                        };
+
+                        foreach (var relTarget in targetEnumerable)
+                        {
+                            if (cancellationToken.IsCancellationRequested)
+                            {
+                                return [];
+                            }
+                            existingTargetFiles.Add(relTarget);
+                        }
+                    }
+
+                    // 2. Enumerate Source Files with fast span slicing and OS-cached File Sizes
+                    var syncJobList = new List<SyncJob>();
+                    int sourcePrefixLen = GetPrefixLength(appState.SourcePath);
+
+                    var sourceEnumerable = new FileSystemEnumerable<bool>(
+                        appState.SourcePath,
+                        (ref FileSystemEntry entry) =>
+                        {
+                            ReadOnlySpan<char> relDir = entry.Directory.Length > sourcePrefixLen
+                                ? entry.Directory.Slice(sourcePrefixLen)
+                                : ReadOnlySpan<char>.Empty;
+
+                            string relPath = Path.Join(relDir, entry.FileName);
+
+                            if (!existingTargetFiles.Contains(relPath))
+                            {
+                                syncJobList.Add(new SyncJob
+                                {
+                                    SongPath = relPath,
+                                    FileSizeBytes = entry.Length, // OS entry - NO stat() syscall!
+                                    PercentageComplete = 0f
+                                });
+                            }
+
+                            return true;
+                        },
+                        options)
+                    {
+                        ShouldIncludePredicate = (ref FileSystemEntry entry) => !entry.IsDirectory,
+                        ShouldRecursePredicate = (ref FileSystemEntry entry) => entry.IsDirectory
+                    };
+
+                    foreach (var _ in sourceEnumerable)
                     {
                         if (cancellationToken.IsCancellationRequested)
                         {
-                            return null;
+                            return [];
                         }
-                        var relTarget = Path.GetRelativePath(appState.TargetPath, targetFile);
-                        existingTargetFiles.Add(relTarget);
-                    }
-                }
-
-                foreach (var sourceFile in Directory.EnumerateFiles(appState.SourcePath, "*", options))
-                {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        return null;
                     }
 
-                    var relativePath = Path.GetRelativePath(appState.SourcePath, sourceFile);
+                    return syncJobList;
+                }, cancellationToken);
 
-                    if (!existingTargetFiles.Contains(relativePath))
-                    {
-                        long fileSizeBytes = 0;
-                        try
-                        {
-                            fileSizeBytes = new FileInfo(sourceFile).Length;
-                        }
-                        catch
-                        {
-                            // Best effort querying file size
-                        }
-
-                        syncJobList.Add(new SyncJob
-                        {
-                            SongPath = relativePath,
-                            FileSizeBytes = fileSizeBytes,
-                            PercentageComplete = 0f
-                        });
-                    }
-                }
-
-                return syncJobList;
-            }, cancellationToken);
-
-            if (jobs is null)
-            {
-                return new DiffResult
-                {
-                    ResultType = ResultType.Cancelled,
-                    Jobs = [],
-                };
+                resultType = jobs.Count == 0 ? ResultType.Cancelled : ResultType.Success;
             }
+            catch (OperationCanceledException)
+            {
+                resultType = ResultType.Cancelled;
+            }
+        }
 
-            return new DiffResult
-            {
-                ResultType = ResultType.Success,
-                Jobs = jobs,
-            };
-        }
-        catch (OperationCanceledException)
+        long totalDiffBytes = jobs.Sum(j => j.FileSizeBytes);
+
+        stopwatch.Stop();
+
+        return new DiffResult
         {
-            return new DiffResult
-            {
-                ResultType = ResultType.Cancelled,
-                Jobs = [],
-            };
+            ResultType = resultType,
+            Jobs = jobs,
+            TotalDiffBytes = totalDiffBytes,
+            ErrorMessage = errorMessage,
+            Elapsed = stopwatch.Elapsed,
+        };
+    }
+
+    private static int GetPrefixLength(string rootPath)
+    {
+        int len = rootPath.Length;
+        if (!rootPath.EndsWith(Path.DirectorySeparatorChar) && !rootPath.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            len++;
         }
+        return len;
     }
     
     // Lol, SyncAsync...

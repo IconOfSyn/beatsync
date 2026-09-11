@@ -267,4 +267,47 @@ public class SyncCoreTests
         Assert.That(handler.TryDequeueResult(out var result), Is.True);
         Assert.That(result.ResultType, Is.EqualTo(ResultType.Cancelled));
     }
+
+    [Test]
+    public async Task BuildSyncList_PerformanceBenchmark()
+    {
+        var tempSource = Path.Combine(Path.GetTempPath(), "BeatSync_Bench_Source_" + Guid.NewGuid().ToString("N"));
+        var tempTarget = Path.Combine(Path.GetTempPath(), "BeatSync_Bench_Target_" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            Directory.CreateDirectory(tempSource);
+            Directory.CreateDirectory(tempTarget);
+
+            // Generate 1,000 files in 50 subdirectories
+            for (int dir = 0; dir < 50; dir++)
+            {
+                var subDir = Path.Combine(tempSource, $"Artist_{dir}", $"Album_{dir}");
+                Directory.CreateDirectory(subDir);
+                for (int file = 0; file < 20; file++)
+                {
+                    File.WriteAllText(Path.Combine(subDir, $"Track_{file}.flac"), "dummy");
+                }
+            }
+
+            var state = new AppState
+            {
+                SourcePath = tempSource,
+                TargetPath = tempTarget,
+            };
+
+            var diffResult = await SyncCore.BuildSyncList(state, default);
+
+            Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
+            Assert.That(diffResult.Jobs.Count, Is.EqualTo(1000));
+            // Assert execution completes under 500ms for 1,000 files
+            Assert.That(diffResult.Elapsed.TotalMilliseconds, Is.LessThan(500));
+            Console.WriteLine($"[BENCHMARK] 1,000 files scanned in {diffResult.Elapsed.TotalMilliseconds:F2} ms");
+        }
+        finally
+        {
+            if (Directory.Exists(tempSource)) Directory.Delete(tempSource, true);
+            if (Directory.Exists(tempTarget)) Directory.Delete(tempTarget, true);
+        }
+    }
 }
