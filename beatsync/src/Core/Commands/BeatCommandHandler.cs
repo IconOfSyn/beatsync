@@ -53,6 +53,9 @@ public class BeatCommandHandler
                 case CommandType.CalculateDiff:
                     HandleCalculateDiff(command);
                     break;
+                case CommandType.CalculateDiffSizes:
+                    HandleCalculateDiffSizes(command);
+                    break;
                 case CommandType.SyncLibrary:
                     HandleSyncLibrary(command);
                     break;
@@ -94,7 +97,7 @@ public class BeatCommandHandler
 
         var task = Task.Run(async () =>
         {
-            var diffResult = await SyncCore.BuildSyncList(AppState, cts.Token);
+            var diffResult = await SyncCore.BuildSyncListAsync(AppState, cts.Token);
             bool isTimedOut = timeoutMs > 0 && cts.IsCancellationRequested && !_isManualCancel;
 
             return new BeatCommandResult
@@ -107,6 +110,29 @@ public class BeatCommandHandler
                     : diffResult.ErrorMessage,
                 DiffResult = diffResult,
                 IsTimedOut = isTimedOut,
+            };
+        });
+
+        _pendingTasks.Add(task);
+    }
+
+    private void HandleCalculateDiffSizes(BeatCommand command)
+    {
+        if (command.DiffResult.Jobs is not { Count: > 0 }) return;
+
+        var cmdId = command.Id;
+        var cts = _activeOpCancelTokenSource;
+        var cancelToken = cts?.Token ?? default;
+
+        var task = Task.Run(async () =>
+        {
+            var sizeResult = await SyncCore.CalculateDiffSizesAsync(AppState, command.DiffResult, cancelToken);
+            return new BeatCommandResult
+            {
+                CommandId = cmdId,
+                CommandType = CommandType.CalculateDiffSizes,
+                ResultType = sizeResult.ResultType,
+                DiffResult = sizeResult
             };
         });
 

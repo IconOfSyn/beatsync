@@ -18,6 +18,7 @@ public enum CommandType : byte
     MountSourceDirectory,
     MountTargetDirectory,
     CalculateDiff,
+    CalculateDiffSizes,
     SyncLibrary,
     Cancel,
     SetMaxParallelStreams,

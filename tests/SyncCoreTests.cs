@@ -58,7 +58,7 @@ public class SyncCoreTests
     {
         var cancelTokenSource = new CancellationTokenSource();
         
-        var diffResult = await SyncCore.BuildSyncList(_appState, cancelTokenSource.Token);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, cancelTokenSource.Token);
         var syncResult = await SyncCore.SyncMusicAsync(_appState, diffResult, null, cancelTokenSource.Token);
         
         Assert.That(syncResult.ResultType == ResultType.Success);
@@ -71,7 +71,7 @@ public class SyncCoreTests
         var cancelTokenSource = new CancellationTokenSource();
         
         _appState.IsDryRun = false;
-        var diffResult = await SyncCore.BuildSyncList(_appState, cancelTokenSource.Token);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, cancelTokenSource.Token);
         var result = await SyncCore.SyncMusicAsync(_appState, diffResult, null, cancelTokenSource.Token);
 
         Assert.That(result.ResultType, Is.EqualTo(ResultType.Success));
@@ -95,7 +95,7 @@ public class SyncCoreTests
         cancelTokenSource.Cancel();
 
         _appState.IsDryRun = false;
-        var diffResult = await SyncCore.BuildSyncList(_appState, cancelTokenSource.Token);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, cancelTokenSource.Token);
         var result = await SyncCore.SyncMusicAsync(_appState, diffResult, null, cancelTokenSource.Token);
 
         Assert.That(result.ResultType, Is.EqualTo(ResultType.Cancelled));
@@ -112,7 +112,7 @@ public class SyncCoreTests
     {
         var cancelTokenSource = new CancellationTokenSource();
         
-        var diffResult = await SyncCore.BuildSyncList(_appState, cancelTokenSource.Token);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, cancelTokenSource.Token);
         await cancelTokenSource.CancelAsync();
         var result = await SyncCore.SyncMusicAsync(_appState, diffResult, null, cancelTokenSource.Token);
         
@@ -122,7 +122,7 @@ public class SyncCoreTests
     [Test]
     public async Task BuildFileSyncList()
     {
-        var diffResult = await SyncCore.BuildSyncList(_appState, default);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, default);
         
         Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
         Assert.That(diffResult.Jobs, Is.Not.Null);
@@ -132,7 +132,7 @@ public class SyncCoreTests
     [Test]
     public async Task BuildSyncList_WhenTargetEmpty_ReturnsAllSourceFiles()
     {
-        var diffResult = await SyncCore.BuildSyncList(_appState, default);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, default);
 
         var expectedFile1 = Path.Combine("AvengedSevenfold", "CityOfEvil", "BeastAndTheHarlot.flac");
         var expectedFile2 = Path.Combine("AvengedSevenfold", "TheStage", "TheStage.flac");
@@ -153,7 +153,7 @@ public class SyncCoreTests
         Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
         await File.WriteAllTextAsync(targetFile, "dummy flac content");
 
-        var diffResult = await SyncCore.BuildSyncList(_appState, default);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, default);
 
         var missingRelative = Path.Combine("AvengedSevenfold", "TheStage", "TheStage.flac");
         Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
@@ -175,7 +175,7 @@ public class SyncCoreTests
         await File.WriteAllTextAsync(file1, "dummy");
         await File.WriteAllTextAsync(file2, "dummy");
 
-        var diffResult = await SyncCore.BuildSyncList(_appState, default);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, default);
 
         Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
         Assert.That(diffResult.Jobs, Is.Empty);
@@ -187,7 +187,7 @@ public class SyncCoreTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        var diffResult = await SyncCore.BuildSyncList(_appState, cts.Token);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, cts.Token);
         
         Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Cancelled));
     }
@@ -196,7 +196,7 @@ public class SyncCoreTests
     public async Task BuildSyncList_WhenSourceDoesNotExist_ReturnsErrorResult()
     {
         var invalidState = _appState with { SourcePath = Path.Combine(AppContext.BaseDirectory, "NonExistentSource") };
-        var diffResult = await SyncCore.BuildSyncList(invalidState, default);
+        var diffResult = await SyncCore.BuildSyncListAsync(invalidState, default);
 
         Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Error));
         Assert.That(diffResult.Jobs, Is.Empty);
@@ -211,7 +211,7 @@ public class SyncCoreTests
 
         try
         {
-            var diffResult = await SyncCore.BuildSyncList(state, default);
+            var diffResult = await SyncCore.BuildSyncListAsync(state, default);
             Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
             Assert.That(diffResult.Jobs, Has.Count.EqualTo(2));
         }
@@ -230,7 +230,7 @@ public class SyncCoreTests
         using var cts = new CancellationTokenSource(1);
         await Task.Delay(10); // Ensure CTS has elapsed
 
-        var diffResult = await SyncCore.BuildSyncList(_appState, cts.Token);
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, cts.Token);
         Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Cancelled));
     }
 
@@ -296,7 +296,7 @@ public class SyncCoreTests
                 TargetPath = tempTarget,
             };
 
-            var diffResult = await SyncCore.BuildSyncList(state, default);
+            var diffResult = await SyncCore.BuildSyncListAsync(state, default);
 
             Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
             Assert.That(diffResult.Jobs.Count, Is.EqualTo(1000));
@@ -309,5 +309,97 @@ public class SyncCoreTests
             if (Directory.Exists(tempSource)) Directory.Delete(tempSource, true);
             if (Directory.Exists(tempTarget)) Directory.Delete(tempTarget, true);
         }
+    }
+
+    [Test]
+    public async Task CalculateDiffSizes_EnrichesJobsWithByteCounts()
+    {
+        var diffResult = await SyncCore.BuildSyncListAsync(_appState, default);
+        Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(diffResult.Jobs, Has.Count.EqualTo(2));
+        Assert.That(diffResult.TotalDiffBytes, Is.EqualTo(0));
+        Assert.That(diffResult.Jobs[0].FileSizeBytes, Is.EqualTo(0));
+
+        var sizeResult = await SyncCore.CalculateDiffSizesAsync(_appState, diffResult, default);
+
+        Assert.That(sizeResult.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(sizeResult.TotalDiffBytes, Is.GreaterThan(0));
+        Assert.That(sizeResult.Jobs[0].FileSizeBytes, Is.GreaterThan(0));
+        Assert.That(sizeResult.Jobs[1].FileSizeBytes, Is.GreaterThan(0));
+        Assert.That(sizeResult.TotalDiffBytes, Is.EqualTo(sizeResult.Jobs[0].FileSizeBytes + sizeResult.Jobs[1].FileSizeBytes));
+    }
+
+    [Test]
+    public async Task BuildSyncList_ExcludesDotFilesAndDirectories_WithoutStat()
+    {
+        var tempSource = Path.Combine(Path.GetTempPath(), "BeatSync_DotTest_Source_" + Guid.NewGuid().ToString("N"));
+        var tempTarget = Path.Combine(Path.GetTempPath(), "BeatSync_DotTest_Target_" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            Directory.CreateDirectory(tempSource);
+            Directory.CreateDirectory(tempTarget);
+
+            // Valid song
+            var albumDir = Path.Combine(tempSource, "Artist", "Album");
+            Directory.CreateDirectory(albumDir);
+            File.WriteAllText(Path.Combine(albumDir, "Track.flac"), "audio content");
+
+            // Hidden dot-files
+            File.WriteAllText(Path.Combine(albumDir, ".DS_Store"), "metadata");
+            File.WriteAllText(Path.Combine(albumDir, "._Track.flac"), "resource fork");
+
+            // Hidden dot-directories
+            var gitDir = Path.Combine(tempSource, ".git", "objects");
+            Directory.CreateDirectory(gitDir);
+            File.WriteAllText(Path.Combine(gitDir, "commit"), "git data");
+
+            var trashDir = Path.Combine(tempSource, ".Trashes", "501");
+            Directory.CreateDirectory(trashDir);
+            File.WriteAllText(Path.Combine(trashDir, "deleted.mp3"), "deleted data");
+
+            var state = new AppState { SourcePath = tempSource, TargetPath = tempTarget };
+            var diffResult = await SyncCore.BuildSyncListAsync(state, default);
+
+            Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
+            Assert.That(diffResult.Jobs, Has.Count.EqualTo(1));
+            Assert.That(diffResult.Jobs[0].SongPath, Is.EqualTo(Path.Join("Artist", "Album", "Track.flac")));
+        }
+        finally
+        {
+            if (Directory.Exists(tempSource)) Directory.Delete(tempSource, true);
+            if (Directory.Exists(tempTarget)) Directory.Delete(tempTarget, true);
+        }
+    }
+
+    [Test]
+    public async Task BeatCommandHandler_CalculateDiffSizes_UpdatesDiffResult()
+    {
+        var handler = new BeatCommandHandler { AppState = _appState };
+        handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 0 });
+        handler.ProcessCommands();
+
+        await Task.Delay(50);
+        handler.ProcessCommands();
+
+        Assert.That(handler.TryDequeueResult(out var diffCmdResult), Is.True);
+        Assert.That(diffCmdResult.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(diffCmdResult.DiffResult.Jobs, Has.Count.EqualTo(2));
+        Assert.That(diffCmdResult.DiffResult.TotalDiffBytes, Is.EqualTo(0));
+
+        handler.Submit(new BeatCommand
+        {
+            Type = CommandType.CalculateDiffSizes,
+            DiffResult = diffCmdResult.DiffResult
+        });
+        handler.ProcessCommands();
+
+        await Task.Delay(50);
+        handler.ProcessCommands();
+
+        Assert.That(handler.TryDequeueResult(out var sizeCmdResult), Is.True);
+        Assert.That(sizeCmdResult.CommandType, Is.EqualTo(CommandType.CalculateDiffSizes));
+        Assert.That(sizeCmdResult.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(sizeCmdResult.DiffResult.TotalDiffBytes, Is.GreaterThan(0));
     }
 }

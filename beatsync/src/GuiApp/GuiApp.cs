@@ -37,6 +37,7 @@ public static class GuiApp
     private static string? _lastInfoMessage;
     private static string _tempSourcePath = "";
     private static string _tempTargetPath = "";
+    private static int _tempSyncStreamCount = 4; 
     private static bool _diffTimedOut;
     
     public static void Run(bool isDryRun)
@@ -119,6 +120,21 @@ public static class GuiApp
                     ImGui.Separator();
                     ImGui.Spacing();
                 }
+
+                ImGui.Text("Sync Stream Count");
+                ImGui.SetNextItemWidth(100);
+                if (ImGui.DragInt("##SyncStreamCount", ref _tempSyncStreamCount, 1f, 1, SyncCore.MaxSyncStreams))
+                {
+                    _handler.Submit(new BeatCommand
+                    {
+                        Type = CommandType.SetMaxParallelStreams,
+                        StreamCount = _tempSyncStreamCount,
+                    });
+                }
+                
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
                 
                 ImGui.Text("Source Directory:");
                 ImGui.SetNextItemWidth(450);
@@ -330,6 +346,9 @@ public static class GuiApp
                 case CommandType.CalculateDiff:
                     HandleCalculateDiffResult(result);
                     break;
+                case CommandType.CalculateDiffSizes:
+                    HandleCalculateDiffSizesResult(result);
+                    break;
                 case CommandType.SyncLibrary:
                     HandleSyncResult(result);
                     break;
@@ -359,6 +378,16 @@ public static class GuiApp
             _diffTimedOut = false;
             _lastInfoMessage = $"Sync Track Count: {result.DiffResult.Jobs.Count} | {result.DiffResult.Elapsed}";
             _lastErrorMessage = null;
+
+            // Trigger progressive background sizing
+            if (_cachedDiffResult.Jobs.Count > 0)
+            {
+                _handler.Submit(new BeatCommand
+                {
+                    Type = CommandType.CalculateDiffSizes,
+                    DiffResult = _cachedDiffResult
+                });
+            }
         }
         else if (result.IsTimedOut)
         {
@@ -372,6 +401,14 @@ public static class GuiApp
             _diffTimedOut = false;
             _lastInfoMessage = "Diff scan cancelled.";
             _lastErrorMessage = null;
+        }
+    }
+
+    private static void HandleCalculateDiffSizesResult(BeatCommandResult result)
+    {
+        if (result.ResultType == ResultType.Success && _cachedDiffResult.Jobs == result.DiffResult.Jobs)
+        {
+            _cachedDiffResult = result.DiffResult;
         }
     }
 
