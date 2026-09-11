@@ -37,7 +37,8 @@ public static class GuiApp
     private static string? _lastInfoMessage;
     private static string _tempSourcePath = "";
     private static string _tempTargetPath = "";
-    private static int _tempSyncStreamCount = 4; 
+    private static int _tempScanStreamCount = 6;
+    private static int _tempTransferStreamCount = 4;
     private static bool _diffTimedOut;
     
     public static void Run(bool isDryRun)
@@ -60,7 +61,8 @@ public static class GuiApp
 
         _tempSourcePath = _handler.AppState.SourcePath;
         _tempTargetPath = _handler.AppState.TargetPath;
-        _tempSyncStreamCount = _handler.AppState.SyncStreamCount;
+        _tempScanStreamCount = _handler.AppState.ScanStreamCount;
+        _tempTransferStreamCount = _handler.AppState.TransferStreamCount;
         
         while (!Raylib.WindowShouldClose())
         {
@@ -362,16 +364,31 @@ public static class GuiApp
         if (areWidgetsDisabled)
             ImGui.BeginDisabled();
 
-        ImGui.Text("Sync Stream Count");
+        ImGui.Text("Scan Streams (Diff / Size):");
         ImGui.SetNextItemWidth(100);
-        if (ImGui.DragInt("##SyncStreamCount", ref _tempSyncStreamCount, 1f, 1, SyncCore.MaxSyncStreams))
+        if (ImGui.DragInt("##ScanStreamCount", ref _tempScanStreamCount, 1f, 1, SyncCore.MaxScanStreams))
         {
             _handler.Submit(new BeatCommand
             {
-                Type = CommandType.SetMaxParallelStreams,
-                StreamCount = _tempSyncStreamCount,
+                Type = CommandType.SetScanStreams,
+                StreamCount = _tempScanStreamCount,
             });
         }
+        ImGui.SameLine();
+        ImGui.TextDisabled("(1-12, overlaps NAS network latency)");
+
+        ImGui.Text("Transfer Streams (Copy):");
+        ImGui.SetNextItemWidth(100);
+        if (ImGui.DragInt("##TransferStreamCount", ref _tempTransferStreamCount, 1f, 1, SyncCore.MaxTransferStreams))
+        {
+            _handler.Submit(new BeatCommand
+            {
+                Type = CommandType.SetTransferStreams,
+                StreamCount = _tempTransferStreamCount,
+            });
+        }
+        ImGui.SameLine();
+        ImGui.TextDisabled("(1-6, prevents HDD head thrashing & SD card write stalls)");
                 
         ImGui.Spacing();
         ImGui.Separator();
@@ -404,7 +421,10 @@ public static class GuiApp
                         
                 PickDirectoryAsync(_handler.AppState.SourcePath, "Select Source Directory", (selected) =>
                 {
+                    _guiStateType = GuiStateType.CalculatingDiff;
+                    
                     _isBrowsingSource = false;
+                    _tempSourcePath = selected;
                             
                     _handler.Submit(new BeatCommand
                     {
@@ -412,7 +432,6 @@ public static class GuiApp
                         Path = selected,
                     });
                             
-                    _guiStateType = GuiStateType.CalculatingDiff;
                     _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
                 });
             }
@@ -460,7 +479,10 @@ public static class GuiApp
                         
                 PickDirectoryAsync(_handler.AppState.TargetPath, "Select Target Directory", (selected) =>
                 {
+                    _guiStateType = GuiStateType.CalculatingDiff;
+                    
                     _isBrowsingTarget = false;
+                    _tempTargetPath = selected;
                             
                     _handler.Submit(new BeatCommand
                     {
@@ -468,7 +490,6 @@ public static class GuiApp
                         Path = selected,
                     });
                                 
-                    _guiStateType = GuiStateType.CalculatingDiff;
                     _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
                 });
             }

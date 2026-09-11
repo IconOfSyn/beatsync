@@ -5,8 +5,10 @@ namespace beatsync;
 
 public static class SyncCore
 {
-    public const int MaxSyncStreams = 20;
+    public const int MaxScanStreams = 12;
+    public const int MaxTransferStreams = 6;
     private const int DryRunJobDelayInMilliseconds = 80;
+    private const int InitialFileCollectionCapacity = 4096;
     
     public static async Task<DiffResult> BuildSyncListAsync(AppState appState, CancellationToken cancellationToken = default)
     {
@@ -69,91 +71,27 @@ public static class SyncCore
                 AttributesToSkip = (FileAttributes)0
             };
 
-            // 1. Enumerate Target Files into HashSet<string>
-            var existingTargetFiles = new HashSet<string>(4096, StringComparer.OrdinalIgnoreCase);
+            int parallelism = Math.Clamp(appState.ScanStreamCount, 1, MaxScanStreams);
+
+            // 1. Enumerate Target Files into HashSet<string> in parallel
             var targetStopwatch = Stopwatch.StartNew();
-            if (Directory.Exists(appState.TargetPath))
-            {
-                int targetPrefixLen = GetPrefixLength(appState.TargetPath);
-
-                var targetEnumerable = new FileSystemEnumerable<string>(
-                    appState.TargetPath,
-                    (ref FileSystemEntry entry) =>
-                    {
-                        ReadOnlySpan<char> relDir = entry.Directory.Length > targetPrefixLen
-                            ? entry.Directory.Slice(targetPrefixLen)
-                            : ReadOnlySpan<char>.Empty;
-
-                        return Path.Join(relDir, entry.FileName);
-                    },
-                    options)
-                {
-                    ShouldIncludePredicate = (ref FileSystemEntry entry) =>
-                        !entry.IsDirectory && (entry.FileName.Length == 0 || entry.FileName[0] != '.'),
-                    ShouldRecursePredicate = (ref FileSystemEntry entry) =>
-                        entry.IsDirectory && (entry.FileName.Length == 0 || entry.FileName[0] != '.')
-                };
-
-                foreach (var relTarget in targetEnumerable)
-                {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        return [];
-                    }
-                    existingTargetFiles.Add(relTarget);
-                }
-            }
+            var existingTargetFiles = EnumerateTargetFiles(appState.TargetPath, parallelism, options, cancellationToken);
             targetStopwatch.Stop();
 
-            // 2. Enumerate Source Files — span-based lookup avoids allocating
-            //    strings for already-synced files (zero stat calls)
-            var syncJobList = new List<SyncJob>(4096);
-            int sourcePrefixLen = GetPrefixLength(appState.SourcePath);
-            var targetLookup = existingTargetFiles.GetAlternateLookup<ReadOnlySpan<char>>();
-
-            var sourceStopwatch = Stopwatch.StartNew();
-            var sourceEnumerable = new FileSystemEnumerable<bool>(
-                appState.SourcePath,
-                (ref FileSystemEntry entry) =>
-                {
-                    ReadOnlySpan<char> relDir = entry.Directory.Length > sourcePrefixLen
-                        ? entry.Directory.Slice(sourcePrefixLen)
-                        : ReadOnlySpan<char>.Empty;
-
-                    Span<char> pathBuffer = stackalloc char[1024];
-                    if (!Path.TryJoin(relDir, entry.FileName, pathBuffer, out int charsWritten))
-                        return true; // path exceeds buffer — skip
-
-                    ReadOnlySpan<char> relPath = pathBuffer.Slice(0, charsWritten);
-
-                    if (!targetLookup.Contains(relPath))
-                    {
-                        syncJobList.Add(new SyncJob
-                        {
-                            SongPath = relPath.ToString(),
-                            FileSizeBytes = 0,
-                            PercentageComplete = 0f
-                        });
-                    }
-
-                    return true;
-                },
-                options)
+            if (cancellationToken.IsCancellationRequested)
             {
-                ShouldIncludePredicate = (ref FileSystemEntry entry) =>
-                    !entry.IsDirectory && (entry.FileName.Length == 0 || entry.FileName[0] != '.'),
-                ShouldRecursePredicate = (ref FileSystemEntry entry) =>
-                    entry.IsDirectory && (entry.FileName.Length == 0 || entry.FileName[0] != '.')
-            };
-
-            foreach (var _ in sourceEnumerable)
-            {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    return [];
-                }
+                return [];
             }
+
+            // 2. Enumerate Source Files in parallel
+            var sourceStopwatch = Stopwatch.StartNew();
+            var syncJobList = EnumerateSourceFiles(appState.SourcePath, existingTargetFiles, parallelism, options, cancellationToken);
             sourceStopwatch.Stop();
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return [];
+            }
 
             Console.WriteLine($"[Diff] Target: {targetStopwatch.ElapsedMilliseconds}ms ({existingTargetFiles.Count} files), " +
                               $"Source: {sourceStopwatch.ElapsedMilliseconds}ms ({syncJobList.Count} diff files)");
@@ -162,6 +100,314 @@ public static class SyncCore
         }, cancellationToken);
 
         return createSyncListTask;
+    }
+
+    private static bool ShouldIncludeFile(ref FileSystemEntry entry) =>
+        !entry.IsDirectory && (entry.FileName.Length == 0 || entry.FileName[0] != '.');
+
+    private static bool ShouldRecurseDirectory(ref FileSystemEntry entry) =>
+        entry.IsDirectory && (entry.FileName.Length == 0 || entry.FileName[0] != '.');
+
+    private static string GetRelativePath(ref FileSystemEntry entry, int prefixLen)
+    {
+        ReadOnlySpan<char> relDir = entry.Directory.Length > prefixLen
+            ? entry.Directory.Slice(prefixLen)
+            : ReadOnlySpan<char>.Empty;
+
+        return Path.Join(relDir, entry.FileName);
+    }
+
+    private readonly record struct DirectoryPartitionResult(
+        List<string> Subtrees,
+        List<string> RootFiles
+    );
+
+    private static DirectoryPartitionResult DiscoverSubtrees(
+        string rootPath,
+        int minPartitions,
+        CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(rootPath) || cancellationToken.IsCancellationRequested)
+        {
+            return new DirectoryPartitionResult([], []);
+        }
+
+        var subtrees = new List<string>();
+        var rootFiles = new List<string>();
+        int prefixLen = GetPrefixLength(rootPath);
+        var queue = new Queue<string>();
+        queue.Enqueue(rootPath);
+
+        var nonRecursiveOptions = new EnumerationOptions
+        {
+            RecurseSubdirectories = false,
+            IgnoreInaccessible = true,
+            AttributesToSkip = (FileAttributes)0
+        };
+
+        while (queue.Count > 0 && (queue.Count + subtrees.Count) < minPartitions)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            string currentDir = queue.Dequeue();
+            var subDirs = new List<string>();
+
+            CollectDirectoryEntries(currentDir, prefixLen, nonRecursiveOptions, subDirs, rootFiles, cancellationToken);
+
+            if (subDirs.Count == 0)
+            {
+                // Leaf folder; any files were captured into rootFiles
+            }
+            else if (queue.Count + subDirs.Count + subtrees.Count <= minPartitions)
+            {
+                foreach (var dir in subDirs)
+                {
+                    queue.Enqueue(dir);
+                }
+            }
+            else
+            {
+                subtrees.AddRange(subDirs);
+            }
+        }
+
+        while (queue.Count > 0 && !cancellationToken.IsCancellationRequested)
+        {
+            subtrees.Add(queue.Dequeue());
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            subtrees.Clear();
+            rootFiles.Clear();
+        }
+
+        return new DirectoryPartitionResult(subtrees, rootFiles);
+    }
+
+    private static void CollectDirectoryEntries(
+        string currentDir,
+        int prefixLen,
+        EnumerationOptions options,
+        List<string> subDirs,
+        List<string> rootFiles,
+        CancellationToken cancellationToken)
+    {
+        var enumerable = new FileSystemEnumerable<bool>(
+            currentDir,
+            (ref FileSystemEntry entry) =>
+            {
+                if (entry.FileName.Length == 0 || entry.FileName[0] == '.')
+                    return true;
+
+                if (entry.IsDirectory)
+                {
+                    subDirs.Add(Path.Combine(currentDir, entry.FileName.ToString()));
+                }
+                else
+                {
+                    rootFiles.Add(GetRelativePath(ref entry, prefixLen));
+                }
+
+                return true;
+            },
+            options);
+
+        foreach (var _ in enumerable)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
+
+    private static List<string> EnumerateTargetSubtree(
+        string subDir,
+        int targetPrefixLen,
+        EnumerationOptions options,
+        CancellationToken cancellationToken)
+    {
+        var files = new List<string>();
+
+        var enumerable = new FileSystemEnumerable<string>(
+            subDir,
+            (ref FileSystemEntry entry) => GetRelativePath(ref entry, targetPrefixLen),
+            options)
+        {
+            ShouldIncludePredicate = ShouldIncludeFile,
+            ShouldRecursePredicate = ShouldRecurseDirectory
+        };
+
+        foreach (var relPath in enumerable)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            files.Add(relPath);
+        }
+
+        return files;
+    }
+
+    private static List<SyncJob> EnumerateSourceSubtree(
+        string subDir,
+        int sourcePrefixLen,
+        HashSet<string>.AlternateLookup<ReadOnlySpan<char>> targetLookup,
+        EnumerationOptions options,
+        CancellationToken cancellationToken)
+    {
+        var jobs = new List<SyncJob>();
+
+        var enumerable = new FileSystemEnumerable<bool>(
+            subDir,
+            (ref FileSystemEntry entry) =>
+            {
+                ReadOnlySpan<char> relDir = entry.Directory.Length > sourcePrefixLen
+                    ? entry.Directory.Slice(sourcePrefixLen)
+                    : ReadOnlySpan<char>.Empty;
+
+                Span<char> pathBuffer = stackalloc char[1024];
+                if (!Path.TryJoin(relDir, entry.FileName, pathBuffer, out int charsWritten))
+                    return true;
+
+                ReadOnlySpan<char> relPath = pathBuffer.Slice(0, charsWritten);
+                if (!targetLookup.Contains(relPath))
+                {
+                    jobs.Add(new SyncJob
+                    {
+                        SongPath = relPath.ToString(),
+                        FileSizeBytes = 0,
+                        PercentageComplete = 0f
+                    });
+                }
+
+                return true;
+            },
+            options)
+        {
+            ShouldIncludePredicate = ShouldIncludeFile,
+            ShouldRecursePredicate = ShouldRecurseDirectory
+        };
+
+        foreach (var _ in enumerable)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        return jobs;
+    }
+
+    private static HashSet<string> EnumerateTargetFiles(
+        string targetPath,
+        int parallelism,
+        EnumerationOptions options,
+        CancellationToken cancellationToken)
+    {
+        var existingTargetFiles = new HashSet<string>(InitialFileCollectionCapacity, StringComparer.OrdinalIgnoreCase);
+
+        if (!Directory.Exists(targetPath) || cancellationToken.IsCancellationRequested)
+        {
+            return existingTargetFiles;
+        }
+
+        var partition = DiscoverSubtrees(targetPath, parallelism * 2, cancellationToken);
+        foreach (var rootFile in partition.RootFiles)
+        {
+            existingTargetFiles.Add(rootFile);
+        }
+
+        if (partition.Subtrees.Count > 0 && !cancellationToken.IsCancellationRequested)
+        {
+            var targetLock = new object();
+            int targetPrefixLen = GetPrefixLength(targetPath);
+            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = parallelism };
+
+            Parallel.ForEach(partition.Subtrees, parallelOptions, (subDir, state) =>
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    state.Stop();
+                    return;
+                }
+
+                var files = EnumerateTargetSubtree(subDir, targetPrefixLen, options, cancellationToken);
+                if (files.Count > 0)
+                {
+                    lock (targetLock)
+                    {
+                        existingTargetFiles.UnionWith(files);
+                    }
+                }
+            });
+        }
+
+        return existingTargetFiles;
+    }
+
+    private static List<SyncJob> EnumerateSourceFiles(
+        string sourcePath,
+        HashSet<string> existingTargetFiles,
+        int parallelism,
+        EnumerationOptions options,
+        CancellationToken cancellationToken)
+    {
+        var syncJobList = new List<SyncJob>(InitialFileCollectionCapacity);
+
+        if (!Directory.Exists(sourcePath) || cancellationToken.IsCancellationRequested)
+        {
+            return syncJobList;
+        }
+
+        var partition = DiscoverSubtrees(sourcePath, parallelism * 2, cancellationToken);
+        var targetLookup = existingTargetFiles.GetAlternateLookup<ReadOnlySpan<char>>();
+
+        foreach (var rootFile in partition.RootFiles)
+        {
+            if (!existingTargetFiles.Contains(rootFile))
+            {
+                syncJobList.Add(new SyncJob
+                {
+                    SongPath = rootFile,
+                    FileSizeBytes = 0,
+                    PercentageComplete = 0f
+                });
+            }
+        }
+
+        if (partition.Subtrees.Count > 0 && !cancellationToken.IsCancellationRequested)
+        {
+            var syncJobLock = new object();
+            int sourcePrefixLen = GetPrefixLength(sourcePath);
+            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = parallelism };
+
+            Parallel.ForEach(partition.Subtrees, parallelOptions, (subDir, state) =>
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    state.Stop();
+                    return;
+                }
+
+                var jobs = EnumerateSourceSubtree(subDir, sourcePrefixLen, targetLookup, options, cancellationToken);
+                if (jobs.Count > 0)
+                {
+                    lock (syncJobLock)
+                    {
+                        syncJobList.AddRange(jobs);
+                    }
+                }
+            });
+        }
+
+        return syncJobList;
     }
 
     private static int GetPrefixLength(string rootPath)
@@ -187,7 +433,7 @@ public static class SyncCore
         var parallelOptions = new ParallelOptions
         {
             CancellationToken = cancellationToken,
-            MaxDegreeOfParallelism = Math.Clamp(appState.SyncStreamCount, 1, MaxSyncStreams)
+            MaxDegreeOfParallelism = Math.Clamp(appState.ScanStreamCount, 1, MaxScanStreams)
         };
 
         try
@@ -229,18 +475,7 @@ public static class SyncCore
         IProgress<SyncProgressReport>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        int syncStreamCount = appState.SyncStreamCount;
-        if (syncStreamCount <= 0)
-        {
-            Console.WriteLine("MaxSyncStreams must be greater than 0, setting to 1");
-            syncStreamCount = 1;
-        }
-        
-        if (syncStreamCount > MaxSyncStreams)
-        {
-            Console.WriteLine($"MaxSyncStreams must be less than max {MaxSyncStreams}, setting to {MaxSyncStreams}");
-            syncStreamCount = MaxSyncStreams;
-        }
+        int syncStreamCount = Math.Clamp(appState.TransferStreamCount, 1, MaxTransferStreams);
 
         
         var stopwatch = Stopwatch.StartNew();
@@ -455,6 +690,7 @@ public static class SyncCore
             catch
             {
                 // Best effort cleanup
+                // Meh, I tried :shrug:
             }
         }
     }

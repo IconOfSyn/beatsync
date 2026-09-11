@@ -21,5 +21,6 @@ public enum CommandType : byte
     CalculateDiffSizes,
     SyncLibrary,
     Cancel,
-    SetMaxParallelStreams,
+    SetScanStreams,
+    SetTransferStreams,
 }

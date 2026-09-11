@@ -10,7 +10,8 @@ public class SyncCoreTests
     [OneTimeSetUp]
     public void Setup()
     {
-        _appState.SyncStreamCount = 4;
+        _appState.ScanStreamCount = 6;
+        _appState.TransferStreamCount = 4;
         _appState.IsDryRun = true;
         _appState.SourcePath = Path.Combine(AppContext.BaseDirectory, "TestData", "Music");
         _appState.TargetPath = Path.Combine(AppContext.BaseDirectory, "TestData", "TargetSyncFolder");
@@ -517,5 +518,65 @@ public class SyncCoreTests
         Assert.That(sizeCmdResult.ResultType, Is.EqualTo(ResultType.Success));
         Assert.That(sizeCmdResult.DiffResult.HasSize, Is.True);
         Assert.That(sizeCmdResult.DiffResult.TotalDiffBytes, Is.GreaterThan(0));
+    }
+
+    [Test]
+    public async Task BuildSyncList_Multithreaded_DiscoversAllFilesAcrossNestedDirectories()
+    {
+        var tempSource = Path.Combine(Path.GetTempPath(), "BeatSync_Multi_Source_" + Guid.NewGuid().ToString("N"));
+        var tempTarget = Path.Combine(Path.GetTempPath(), "BeatSync_Multi_Target_" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            Directory.CreateDirectory(tempSource);
+            Directory.CreateDirectory(tempTarget);
+
+            // 1 loose root file
+            await File.WriteAllTextAsync(Path.Combine(tempSource, "root_song.mp3"), "dummy");
+
+            // 10 artists, 3 albums each, 2 tracks each = 60 tracks
+            for (int a = 0; a < 10; a++)
+            {
+                for (int al = 0; al < 3; al++)
+                {
+                    var albumDir = Path.Combine(tempSource, $"Artist_{a}", $"Album_{al}");
+                    Directory.CreateDirectory(albumDir);
+                    for (int t = 0; t < 2; t++)
+                    {
+                        await File.WriteAllTextAsync(Path.Combine(albumDir, $"Track_{t}.flac"), "audio data");
+                    }
+                }
+            }
+
+            // Put 1 file into target: Artist_0/Album_0/Track_0.flac
+            var targetExistingDir = Path.Combine(tempTarget, "Artist_0", "Album_0");
+            Directory.CreateDirectory(targetExistingDir);
+            await File.WriteAllTextAsync(Path.Combine(targetExistingDir, "Track_0.flac"), "already synced");
+
+            var state = new AppState
+            {
+                SourcePath = tempSource,
+                TargetPath = tempTarget,
+                ScanStreamCount = 8,
+                TransferStreamCount = 4
+            };
+
+            var diffResult = await SyncCore.BuildSyncListAsync(state, default);
+
+            Assert.That(diffResult.ResultType, Is.EqualTo(ResultType.Success));
+            // 61 total source files - 1 in target = 60 diff jobs
+            Assert.That(diffResult.Jobs, Has.Count.EqualTo(60));
+
+            var jobPaths = diffResult.Jobs.Select(j => j.SongPath).ToHashSet();
+            Assert.That(jobPaths, Does.Contain("root_song.mp3"));
+            Assert.That(jobPaths, Does.Contain(Path.Join("Artist_0", "Album_0", "Track_1.flac")));
+            Assert.That(jobPaths, Does.Contain(Path.Join("Artist_9", "Album_2", "Track_1.flac")));
+            Assert.That(jobPaths, Does.Not.Contain(Path.Join("Artist_0", "Album_0", "Track_0.flac")));
+        }
+        finally
+        {
+            if (Directory.Exists(tempSource)) Directory.Delete(tempSource, true);
+            if (Directory.Exists(tempTarget)) Directory.Delete(tempTarget, true);
+        }
     }
 }

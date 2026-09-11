@@ -3,12 +3,14 @@ namespace beatsync;
 public record struct AppState()
 {
     public const int CurrentVersion = 1;
-    public const int DefaultSyncStreamCount = 4;
+    public const int DefaultScanStreamCount = 6;
+    public const int DefaultTransferStreamCount = 4;
 
     public int Version = CurrentVersion;
     public string SourcePath = "";
     public string TargetPath = "";
-    public int SyncStreamCount = DefaultSyncStreamCount;
+    public int ScanStreamCount = DefaultScanStreamCount;
+    public int TransferStreamCount = DefaultTransferStreamCount;
     public bool IsDryRun = false;
     
     
@@ -22,7 +24,8 @@ public record struct AppState()
         writer.Write(state.Version);
         writer.Write(state.SourcePath ?? string.Empty);
         writer.Write(state.TargetPath ?? string.Empty);
-        writer.Write(state.SyncStreamCount);
+        writer.Write(state.ScanStreamCount);
+        writer.Write(state.TransferStreamCount);
         writer.Write(state.IsDryRun);
 
         return stream.ToArray();
@@ -40,7 +43,8 @@ public record struct AppState()
             appState.Version = reader.ReadInt32();
             appState.SourcePath = reader.ReadString(); 
             appState.TargetPath = reader.ReadString(); 
-            appState.SyncStreamCount = reader.ReadInt32();
+            appState.ScanStreamCount = reader.ReadInt32();
+            appState.TransferStreamCount = reader.ReadInt32();
             appState.IsDryRun = reader.ReadBoolean();
         }
         catch (Exception e)

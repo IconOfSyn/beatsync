@@ -62,8 +62,11 @@ public class BeatCommandHandler
                 case CommandType.Cancel:
                     HandleCancel(command);
                     break;
-                case CommandType.SetMaxParallelStreams:
-                    HandleSetMaxParallelStreams(command);
+                case CommandType.SetScanStreams:
+                    HandleSetScanStreams(command);
+                    break;
+                case CommandType.SetTransferStreams:
+                    HandleSetTransferStreams(command);
                     break;
             }
         }
@@ -198,8 +201,13 @@ public class BeatCommandHandler
         _activeOpCancelTokenSource?.Cancel();
     }
 
-    private void HandleSetMaxParallelStreams(BeatCommand command)
+    private void HandleSetScanStreams(BeatCommand command)
     {
-        AppState.SyncStreamCount = command.StreamCount;
+        AppState.ScanStreamCount = command.StreamCount;
+    }
+
+    private void HandleSetTransferStreams(BeatCommand command)
+    {
+        AppState.TransferStreamCount = command.StreamCount;
     }
 }

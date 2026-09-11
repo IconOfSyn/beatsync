@@ -7,7 +7,8 @@ public class AppStateTests
         Version = 1,
         SourcePath = "SourceTest",
         TargetPath =  "TargetTest",
-        SyncStreamCount = 4,
+        ScanStreamCount = 6,
+        TransferStreamCount = 4,
         IsDryRun = false,
     };
 
@@ -19,7 +20,9 @@ public class AppStateTests
         10, 83, 111, 117, 114, 99, 101, 84, 101, 115, 116, 
         // Target Path
         10, 84, 97, 114, 103, 101, 116, 84, 101, 115, 116,
-        // Sync Stream Count
+        // Scan Stream Count
+        6, 0, 0, 0,
+        // Transfer Stream Count
         4, 0, 0, 0,
         // IsDryRun
         0
