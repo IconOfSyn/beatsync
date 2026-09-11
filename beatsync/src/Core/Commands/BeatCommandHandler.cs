@@ -79,7 +79,6 @@ public class BeatCommandHandler
         AppState.TargetPath = command.Path ?? "";
     }
 
-
     private void HandleCalculateDiff(BeatCommand command)
     {
         _activeOpCancelTokenSource?.Cancel();
@@ -106,7 +105,7 @@ public class BeatCommandHandler
                 CommandType = CommandType.CalculateDiff,
                 ResultType = diffResult.ResultType,
                 ErrorMessage = isTimedOut
-                    ? "Auto-scan timed out (>100ms). Click 'Calculate Diff' to perform full scan."
+                    ? $"Auto-scan timed out (>{timeoutMs}). Click 'Calculate Diff' to perform full scan."
                     : diffResult.ErrorMessage,
                 DiffResult = diffResult,
                 IsTimedOut = isTimedOut,
@@ -118,31 +117,70 @@ public class BeatCommandHandler
 
     private void HandleCalculateDiffSizes(BeatCommand command)
     {
-        if (command.DiffResult.Jobs is not { Count: > 0 }) return;
-
         var cmdId = command.Id;
-        var cts = _activeOpCancelTokenSource;
-        var cancelToken = cts?.Token ?? default;
-
-        var task = Task.Run(async () =>
+        
+        if (command.DiffResult.IsValid())
         {
-            var sizeResult = await SyncCore.CalculateDiffSizesAsync(AppState, command.DiffResult, cancelToken);
-            return new BeatCommandResult
+            _activeOpCancelTokenSource = new CancellationTokenSource();
+            var cts = _activeOpCancelTokenSource;
+            var cancelToken = cts.Token;
+
+            var task = Task.Run(async () =>
+            {
+                var sizeResult = await SyncCore.CalculateDiffSizesAsync(AppState, command.DiffResult, cancelToken);
+                return new BeatCommandResult
+                {
+                    CommandId = cmdId,
+                    CommandType = CommandType.CalculateDiffSizes,
+                    ResultType = sizeResult.ResultType,
+                    DiffResult = sizeResult
+                };
+            });
+
+            _pendingTasks.Add(task);
+        }
+        else
+        {
+            _resultQueue.Enqueue(new BeatCommandResult
             {
                 CommandId = cmdId,
                 CommandType = CommandType.CalculateDiffSizes,
-                ResultType = sizeResult.ResultType,
-                DiffResult = sizeResult
-            };
-        });
-
-        _pendingTasks.Add(task);
+                ResultType = ResultType.Error,
+                ErrorMessage = $"Diff Result is not valid",
+            });
+        }
     }
 
     private void HandleSyncLibrary(BeatCommand command)
     {
-        // Early out if the diff result is not valid
-        if (!IsValid(command.DiffResult))
+        if (command.DiffResult.IsValid())
+        {
+            _activeOpCancelTokenSource?.Cancel();
+            _activeOpCancelTokenSource = new CancellationTokenSource();
+            _isManualCancel = false;
+            LatestProgress = default;
+
+            var cmdId = command.Id;
+            var cancelToken = _activeOpCancelTokenSource.Token;
+
+            var progress = new Progress<SyncProgressReport>(report => LatestProgress = report);
+
+            var task = Task.Run(async () =>
+            {
+                var result = await SyncCore.SyncMusicAsync(AppState, command.DiffResult, progress, cancelToken);
+
+                return new BeatCommandResult
+                {
+                    CommandId = cmdId,
+                    CommandType = CommandType.SyncLibrary,
+                    ResultType = result.ResultType,
+                    SyncResult = result,
+                };
+            });
+
+            _pendingTasks.Add(task);
+        }
+        else
         {
             _resultQueue.Enqueue(new BeatCommandResult
             {
@@ -151,35 +189,7 @@ public class BeatCommandHandler
                 ResultType = ResultType.Error,
                 ErrorMessage = "Track diff is not valid"
             });
-
-            return;
         }
-        
-        
-        _activeOpCancelTokenSource?.Cancel();
-        _activeOpCancelTokenSource = new CancellationTokenSource();
-        _isManualCancel = false;
-        LatestProgress = default;
-
-        var cmdId = command.Id;
-        var cancelToken = _activeOpCancelTokenSource.Token;
-
-        var progress = new Progress<SyncProgressReport>(report => LatestProgress = report);
-
-        var task = Task.Run(async () =>
-        {
-            var result = await SyncCore.SyncMusicAsync(AppState, command.DiffResult, progress, cancelToken);
-
-            return new BeatCommandResult
-            {
-                CommandId = cmdId,
-                CommandType = CommandType.SyncLibrary,
-                ResultType = result.ResultType,
-                SyncResult = result,
-            };
-        });
-
-        _pendingTasks.Add(task);
     }
 
     private void HandleCancel(BeatCommand command)
@@ -191,11 +201,5 @@ public class BeatCommandHandler
     private void HandleSetMaxParallelStreams(BeatCommand command)
     {
         AppState.SyncStreamCount = command.StreamCount;
-    }
-
-    private bool IsValid(DiffResult diffResult)
-    {
-        return diffResult.ResultType == ResultType.Success && 
-               diffResult.Jobs?.Count > 0;
     }
 }

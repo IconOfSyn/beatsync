@@ -12,7 +12,7 @@ public record struct AppState()
     public bool IsDryRun = false;
     
     
-    public bool HasValidPaths() => !string.IsNullOrWhiteSpace(SourcePath) && !string.IsNullOrWhiteSpace(TargetPath);
+    public bool IsValid() => Version > 0 && !string.IsNullOrWhiteSpace(SourcePath) && !string.IsNullOrWhiteSpace(TargetPath);
 
     public static byte[] Serialize(AppState state)
     {

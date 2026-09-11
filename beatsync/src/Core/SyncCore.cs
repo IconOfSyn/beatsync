@@ -166,10 +166,8 @@ public static class SyncCore
         DiffResult diffResult,
         CancellationToken cancellationToken = default)
     {
-        if (diffResult.ResultType != ResultType.Success || diffResult.Jobs is not { Count: > 0 })
-        {
+        if (!diffResult.IsValid())
             return diffResult;
-        }
 
         var jobs = diffResult.Jobs;
         long totalBytes = 0;
@@ -238,13 +236,15 @@ public static class SyncCore
         var fileResults = new FileSyncResult[syncJobList.Count];
         
         int completedCount = 0;
-        long totalBytesToTransfer = syncJobList.Sum(j => j.FileSizeBytes);
-        if (totalBytesToTransfer == 0 && syncJobList.Count > 0)
+        long totalBytesToTransfer = diffResult.TotalDiffBytes;
+        
+        if (diffResult.IsValid() && !diffResult.HasSize())
         {
             diffResult = await CalculateDiffSizesAsync(appState, diffResult, cancellationToken);
             syncJobList = diffResult.Jobs;
             totalBytesToTransfer = diffResult.TotalDiffBytes;
         }
+        
         long totalBytesTransferred = 0;
 
         var parallelOptions = new ParallelOptions

@@ -401,5 +401,121 @@ public class SyncCoreTests
         Assert.That(sizeCmdResult.CommandType, Is.EqualTo(CommandType.CalculateDiffSizes));
         Assert.That(sizeCmdResult.ResultType, Is.EqualTo(ResultType.Success));
         Assert.That(sizeCmdResult.DiffResult.TotalDiffBytes, Is.GreaterThan(0));
+        Assert.That(sizeCmdResult.DiffResult.HasSize, Is.True);
+    }
+
+    [Test]
+    public void DiffResult_IsValid_And_HasSize_Behavior()
+    {
+        var validNoSize = new DiffResult
+        {
+            ResultType = ResultType.Success,
+            Jobs = [new SyncJob { SongPath = "test.mp3" }],
+            TotalDiffBytes = 0
+        };
+        Assert.That(validNoSize.IsValid, Is.True);
+        Assert.That(validNoSize.HasSize, Is.False);
+
+        var validWithSize = validNoSize with { TotalDiffBytes = 1024 };
+        Assert.That(validWithSize.IsValid, Is.True);
+        Assert.That(validWithSize.HasSize, Is.True);
+
+        var emptyJobs = validNoSize with { Jobs = [] };
+        Assert.That(emptyJobs.IsValid, Is.False);
+        Assert.That(emptyJobs.HasSize, Is.False);
+
+        var cancelled = validWithSize with { ResultType = ResultType.Cancelled };
+        Assert.That(cancelled.IsValid, Is.False);
+        Assert.That(cancelled.HasSize, Is.False);
+
+        var error = validWithSize with { ResultType = ResultType.Error };
+        Assert.That(error.IsValid, Is.False);
+        Assert.That(error.HasSize, Is.False);
+
+        var defaultResult = default(DiffResult);
+        Assert.That(defaultResult.IsValid, Is.False);
+        Assert.That(defaultResult.HasSize, Is.False);
+    }
+
+    [Test]
+    public void SyncProgressReport_ProgressFraction_And_ProgressPercent()
+    {
+        // 1. Zero total bytes: uses track count
+        var trackReport = new SyncProgressReport(
+            CompletedCount: 5,
+            TotalCount: 10,
+            CurrentPath: "song.mp3",
+            BytesTransferred: 0,
+            TotalBytes: 0
+        );
+        Assert.That(trackReport.ProgressFraction, Is.EqualTo(0.5f));
+        Assert.That(trackReport.ProgressPercent, Is.EqualTo(50));
+
+        // 2. Normal byte progress
+        var byteReport = new SyncProgressReport(
+            CompletedCount: 2,
+            TotalCount: 10,
+            CurrentPath: "song.mp3",
+            BytesTransferred: 500,
+            TotalBytes: 1000
+        );
+        Assert.That(byteReport.ProgressFraction, Is.EqualTo(0.5f));
+        Assert.That(byteReport.ProgressPercent, Is.EqualTo(50));
+
+        // 3. Bytes transferred exceed total bytes while tracks are incomplete:
+        // Fraction is clamped to 1.0f, but ProgressPercent caps at 99%
+        var overByteReport = new SyncProgressReport(
+            CompletedCount: 3,
+            TotalCount: 10,
+            CurrentPath: "song.mp3",
+            BytesTransferred: 1500,
+            TotalBytes: 1000
+        );
+        Assert.That(overByteReport.ProgressFraction, Is.EqualTo(1.0f));
+        Assert.That(overByteReport.ProgressPercent, Is.EqualTo(99));
+
+        // 4. All tracks complete: reaches 100%
+        var finishedReport = new SyncProgressReport(
+            CompletedCount: 10,
+            TotalCount: 10,
+            CurrentPath: "song.mp3",
+            BytesTransferred: 1000,
+            TotalBytes: 1000
+        );
+        Assert.That(finishedReport.ProgressFraction, Is.EqualTo(1.0f));
+        Assert.That(finishedReport.ProgressPercent, Is.EqualTo(100));
+    }
+
+    [Test]
+    public async Task CalculateDiffSizes_AfterTimedDiff_DoesNotCancelEarly()
+    {
+        var handler = new BeatCommandHandler { AppState = _appState };
+        // Diff with 30ms timeout
+        handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 30 });
+        handler.ProcessCommands();
+
+        await Task.Delay(10);
+        handler.ProcessCommands();
+
+        Assert.That(handler.TryDequeueResult(out var diffCmdResult), Is.True);
+        Assert.That(diffCmdResult.ResultType, Is.EqualTo(ResultType.Success));
+
+        // Sizing command dispatched
+        handler.Submit(new BeatCommand
+        {
+            Type = CommandType.CalculateDiffSizes,
+            DiffResult = diffCmdResult.DiffResult
+        });
+        handler.ProcessCommands();
+
+        // Wait longer than the original 30ms timeout to ensure sizing isn't cancelled
+        await Task.Delay(80);
+        handler.ProcessCommands();
+
+        Assert.That(handler.TryDequeueResult(out var sizeCmdResult), Is.True);
+        Assert.That(sizeCmdResult.CommandType, Is.EqualTo(CommandType.CalculateDiffSizes));
+        Assert.That(sizeCmdResult.ResultType, Is.EqualTo(ResultType.Success));
+        Assert.That(sizeCmdResult.DiffResult.HasSize, Is.True);
+        Assert.That(sizeCmdResult.DiffResult.TotalDiffBytes, Is.GreaterThan(0));
     }
 }

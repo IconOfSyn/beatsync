@@ -52,7 +52,7 @@ public static class GuiApp
         _handler.AppState = LoadAppState(saveFile);
         _handler.AppState.IsDryRun = isDryRun;
 
-        if (_handler.AppState.HasValidPaths())
+        if (_handler.AppState.IsValid())
         {
             _guiStateType = GuiStateType.CalculatingDiff;
             _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
@@ -60,6 +60,7 @@ public static class GuiApp
 
         _tempSourcePath = _handler.AppState.SourcePath;
         _tempTargetPath = _handler.AppState.TargetPath;
+        _tempSyncStreamCount = _handler.AppState.SyncStreamCount;
         
         while (!Raylib.WindowShouldClose())
         {
@@ -120,6 +121,9 @@ public static class GuiApp
                     ImGui.Separator();
                     ImGui.Spacing();
                 }
+                
+                if (_guiStateType != GuiStateType.Idle)
+                    ImGui.BeginDisabled();
 
                 ImGui.Text("Sync Stream Count");
                 ImGui.SetNextItemWidth(100);
@@ -245,6 +249,9 @@ public static class GuiApp
                     }
                 }
                 
+                if (_guiStateType != GuiStateType.Idle)
+                    ImGui.EndDisabled();
+                
                 ImGui.Spacing();
                 ImGui.Separator();
                 ImGui.Spacing();
@@ -287,7 +294,7 @@ public static class GuiApp
                     ImGui.Checkbox("Dry Run", ref _handler.AppState.IsDryRun);
                     ImGui.SameLine();
 
-                    if (_handler.AppState.HasValidPaths())
+                    if (_handler.AppState.IsValid())
                     {
                         if (ImGui.Button("Calculate Diff"))
                         {
@@ -297,17 +304,18 @@ public static class GuiApp
                         }
                     }
 
-                    if (_cachedDiffResult.Jobs is { Count: > 0 })
+                    if (_cachedDiffResult.IsValid())
                     {
                         ImGui.SameLine();
                         
-                        string syncButtonLabel = _cachedDiffResult.TotalDiffBytes > 0
+                        string syncButtonLabel = _cachedDiffResult.HasSize()
                             ? $"Sync {_cachedDiffResult.Jobs.Count} tracks ({SyncProgressReport.FormatBytes(_cachedDiffResult.TotalDiffBytes)})"
                             : $"Sync {_cachedDiffResult.Jobs.Count} tracks";
 
                         if (ImGui.Button(syncButtonLabel))
                         {
                             _guiStateType = GuiStateType.Syncing;
+                            _lastSyncProgressReport = default;
                             
                             _handler.Submit(new BeatCommand
                             {
@@ -367,6 +375,7 @@ public static class GuiApp
             _lastSyncProgressReport = _handler.LatestProgress;
         }
     }
+    
 
     private static void HandleCalculateDiffResult(BeatCommandResult result)
     {
@@ -380,7 +389,7 @@ public static class GuiApp
             _lastErrorMessage = null;
 
             // Trigger progressive background sizing
-            if (_cachedDiffResult.Jobs.Count > 0)
+            if (_cachedDiffResult.IsValid())
             {
                 _handler.Submit(new BeatCommand
                 {
@@ -420,13 +429,6 @@ public static class GuiApp
         Console.WriteLine(_lastInfoMessage);
                     
         _lastErrorMessage = null;
-        
-        if (result.ResultType == ResultType.Success)
-        {
-            // Refresh diff automatically with 100ms timeout
-            _guiStateType = GuiStateType.CalculatingDiff;
-            _handler.Submit(new BeatCommand { Type = CommandType.CalculateDiff, TimeoutMs = 100 });
-        }
     }
 
     private static void PickDirectoryAsync(string initialPath, string prompt, Action<string?> onComplete)

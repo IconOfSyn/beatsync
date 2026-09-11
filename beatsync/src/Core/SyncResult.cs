@@ -48,11 +48,26 @@ public readonly record struct SyncProgressReport(
     long TotalBytes = 0
 )
 {
-    public float Fraction => TotalCount == 0 ? 0f : (float)CompletedCount / TotalCount;
+    public float Fraction => TotalCount <= 0 ? 0f : Math.Clamp((float)CompletedCount / TotalCount, 0f, 1f);
     public int Percent => (int)(Fraction * 100);
 
-    public float ByteFraction => TotalBytes == 0 ? 0f : (float)BytesTransferred / TotalBytes;
+    public float ByteFraction => TotalBytes <= 0 ? 0f : Math.Clamp((float)BytesTransferred / TotalBytes, 0f, 1f);
     public int BytePercent => (int)(ByteFraction * 100);
+
+    public float ProgressFraction => TotalBytes > 0 ? ByteFraction : Fraction;
+
+    public int ProgressPercent
+    {
+        get
+        {
+            int percent = (int)(ProgressFraction * 100);
+            if (CompletedCount < TotalCount && percent >= 100)
+            {
+                return 99;
+            }
+            return percent;
+        }
+    }
 
     public string FormattedProgress =>
         $"{CompletedCount}/{TotalCount} tracks ({FormatBytes(BytesTransferred)} / {FormatBytes(TotalBytes)})";
