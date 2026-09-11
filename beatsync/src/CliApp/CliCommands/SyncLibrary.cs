@@ -33,17 +33,28 @@ public partial class SyncLibrary : ICommand
         };
 
         // Get diff list
+        await console.Output.WriteLineAsync("Scanning libraries...");
         var diffResult = await SyncCore.BuildSyncListAsync(appState, cancellationToken);
         if (diffResult.ResultType != ResultType.Success)
         {
             throw new CommandException($"Diff Failed: {diffResult.ErrorMessage}", 666);
         }
-        
+
+        // Check to see if there are no tracks to sync
+        if (diffResult.Jobs.Count == 0)
+        {
+            await console.Output.WriteLineAsync("✓ Everything is up to date. No tracks to sync!");
+            return;
+        }
+
+        string dryRunSuffix = DryRun ? " [Dry Run]" : "";
+        await console.Output.WriteLineAsync($"Found {diffResult.Jobs.Count} track(s) to sync ({SyncProgressReport.FormatBytes(diffResult.TotalDiffBytes)}){dryRunSuffix}.");
+
         // Sync library
-        var syncTask = SyncCore.SyncMusicAsync(appState, diffResult, null, cancellationToken);
-        var syncResult = await syncTask;
+        await using var progress = new ConsoleSyncProgress(console);
+        var syncResult = await SyncCore.SyncMusicAsync(appState, diffResult, progress, cancellationToken);
 
         // Write result
-        await console.Output.WriteLineAsync($"{syncResult.ResultType} in {syncResult.Elapsed} | {syncResult.SuccessCount}/{syncResult.TotalCount} | failed syncs: {syncResult.FailedCount} | cancelled syncs: {syncResult.CancelledCount}");
+        await console.Output.WriteLineAsync($"{syncResult.ResultType} in {syncResult.Elapsed:mm\\:ss\\.ff} | {syncResult.SuccessCount}/{syncResult.TotalCount} tracks synced | failed: {syncResult.FailedCount} | cancelled: {syncResult.CancelledCount}");
     }
 }
