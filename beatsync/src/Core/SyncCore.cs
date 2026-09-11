@@ -70,7 +70,8 @@ public static class SyncCore
             };
 
             // 1. Enumerate Target Files into HashSet<string>
-            var existingTargetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var existingTargetFiles = new HashSet<string>(4096, StringComparer.OrdinalIgnoreCase);
+            var targetStopwatch = Stopwatch.StartNew();
             if (Directory.Exists(appState.TargetPath))
             {
                 int targetPrefixLen = GetPrefixLength(appState.TargetPath);
@@ -102,11 +103,15 @@ public static class SyncCore
                     existingTargetFiles.Add(relTarget);
                 }
             }
+            targetStopwatch.Stop();
 
-            // 2. Enumerate Source Files with fast span slicing (zero stat calls)
-            var syncJobList = new List<SyncJob>();
+            // 2. Enumerate Source Files — span-based lookup avoids allocating
+            //    strings for already-synced files (zero stat calls)
+            var syncJobList = new List<SyncJob>(4096);
             int sourcePrefixLen = GetPrefixLength(appState.SourcePath);
+            var targetLookup = existingTargetFiles.GetAlternateLookup<ReadOnlySpan<char>>();
 
+            var sourceStopwatch = Stopwatch.StartNew();
             var sourceEnumerable = new FileSystemEnumerable<bool>(
                 appState.SourcePath,
                 (ref FileSystemEntry entry) =>
@@ -115,13 +120,17 @@ public static class SyncCore
                         ? entry.Directory.Slice(sourcePrefixLen)
                         : ReadOnlySpan<char>.Empty;
 
-                    string relPath = Path.Join(relDir, entry.FileName);
+                    Span<char> pathBuffer = stackalloc char[1024];
+                    if (!Path.TryJoin(relDir, entry.FileName, pathBuffer, out int charsWritten))
+                        return true; // path exceeds buffer — skip
 
-                    if (!existingTargetFiles.Contains(relPath))
+                    ReadOnlySpan<char> relPath = pathBuffer.Slice(0, charsWritten);
+
+                    if (!targetLookup.Contains(relPath))
                     {
                         syncJobList.Add(new SyncJob
                         {
-                            SongPath = relPath,
+                            SongPath = relPath.ToString(),
                             FileSizeBytes = 0,
                             PercentageComplete = 0f
                         });
@@ -144,6 +153,10 @@ public static class SyncCore
                     return [];
                 }
             }
+            sourceStopwatch.Stop();
+
+            Console.WriteLine($"[Diff] Target: {targetStopwatch.ElapsedMilliseconds}ms ({existingTargetFiles.Count} files), " +
+                              $"Source: {sourceStopwatch.ElapsedMilliseconds}ms ({syncJobList.Count} diff files)");
 
             return syncJobList;
         }, cancellationToken);
