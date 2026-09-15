@@ -175,7 +175,6 @@ public class SyncCore
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Expected cancellation - do not treat as an unhandled crash
-            Console.Write("Cancellation Complete");
         }
 
         stopwatch.Stop();
@@ -231,10 +230,7 @@ public class SyncCore
 
             int parallelism = Math.Clamp(appState.ScanStreamCount, 1, MaxScanStreams);
 
-            // 1. Enumerate Target Files into HashSet<string> in parallel
-            var targetStopwatch = Stopwatch.StartNew();
             var existingTargetFiles = EnumerateTargetFiles(appState.TargetPath, parallelism, options, cancellationToken);
-            targetStopwatch.Stop();
 
             if (cancellationToken.IsCancellationRequested)
             {
@@ -250,9 +246,6 @@ public class SyncCore
             {
                 return [];
             }
-
-            Console.WriteLine($"[Diff] Target: {targetStopwatch.ElapsedMilliseconds}ms ({existingTargetFiles.Count} files), " +
-                              $"Source: {sourceStopwatch.ElapsedMilliseconds}ms ({syncJobList.Count} diff files)");
 
             return syncJobList;
         }, cancellationToken);

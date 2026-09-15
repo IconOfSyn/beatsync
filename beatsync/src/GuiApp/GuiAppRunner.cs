@@ -3,6 +3,7 @@ using ImGuiNET;
 using Microsoft.Extensions.Logging;
 using Raylib_cs;
 using rlImGui_cs;
+using ZLogger;
 
 namespace beatsync;
 
@@ -25,8 +26,8 @@ public class GuiAppRunner
     private const float AnimationSpeed = 3f;
 
     // Command handler
-    private readonly BeatCommandHandler _commandHandler = new();
-    private readonly ILogger<SyncCore> _logger;
+    private readonly BeatCommandHandler _commandHandler;
+    private readonly ILogger<GuiAppRunner> _logger;
 
     // UI State
     private GuiStateType _guiStateType = GuiStateType.Idle;
@@ -40,8 +41,9 @@ public class GuiAppRunner
     private Action<string>? _onFolderPicked;
 
     
-    public GuiAppRunner(ILogger<SyncCore> logger)
+    public GuiAppRunner(BeatCommandHandler commandHandler, ILogger<GuiAppRunner> logger)
     {
+        _commandHandler = commandHandler;
         _logger = logger;
     }
     
@@ -92,6 +94,12 @@ public class GuiAppRunner
             {
                 DrawStatusBanners();
 
+                DrawLogButton();
+                    
+                ImGui.Spacing();
+                ImGui.Separator();
+                ImGui.Spacing();
+
                 DrawMainWidgets();
 
                 ImGui.Spacing();
@@ -122,6 +130,8 @@ public class GuiAppRunner
     {
         while (_commandHandler.TryDequeueResult(out var result))
         {
+            _logger.LogInformation($"Handling command results: {result.CommandId}|{result.CommandType}");
+            
             switch (result.CommandType)
             {
                 case CommandType.CalculateDiff:
@@ -135,9 +145,21 @@ public class GuiAppRunner
             if (!string.IsNullOrEmpty(result.ErrorMessage) && !result.IsTimedOut)
             {
                 _lastErrorMessage = result.ErrorMessage;
-                Console.WriteLine(_lastErrorMessage);
+                _logger.LogError(result.ErrorMessage);
             }
         }
+    }
+
+    private void SetInfoMessage(string infoMessage)
+    {
+        _lastInfoMessage = infoMessage;
+        _logger.LogInformation(infoMessage);
+    }
+    
+    private void SetErrorMessage(string errorMessage)
+    {
+        _lastInfoMessage = errorMessage;
+        _logger.LogError(errorMessage);
     }
 
     private void HandleCalculateDiffResult(BeatCommandResult result)
@@ -148,32 +170,65 @@ public class GuiAppRunner
         {
             _cachedDiffResult = result.DiffResult;
             _diffTimedOut = false;
-            _lastInfoMessage = $"Sync Track Count: {result.DiffResult.Jobs.Count} | {result.DiffResult.Elapsed}";
             _lastErrorMessage = null;
+            
+            SetInfoMessage($"Sync Track Count: {result.DiffResult.Jobs.Count} | {result.DiffResult.Elapsed}");
         }
         else if (result.IsTimedOut)
         {
             _diffTimedOut = true;
             _cachedDiffResult = default;
-            _lastInfoMessage = null;
-            _lastErrorMessage = null;
+            
+            ClearMessages();
         }
         else if (result.ResultType == ResultType.Cancelled)
         {
             _diffTimedOut = false;
-            _lastInfoMessage = "Diff scan cancelled.";
             _lastErrorMessage = null;
+            SetInfoMessage("Diff scan cancelled.");
         }
     }
 
-    private void HandleSyncResult(BeatCommandResult result)
+    private void HandleSyncResult(BeatCommandResult commandResult)
     {
         _guiStateType = GuiStateType.Idle;
         
         InvalidateDiff();
-                    
-        _lastInfoMessage = $"Completed Sync: {result.SyncResult}";
-        Console.WriteLine(_lastInfoMessage);
+
+        LogSyncResult(commandResult.SyncResult);
+    }
+
+    private void LogSyncResult(SyncResult? result)
+    {
+        if (result == null)
+            return;
+        
+
+        switch (result.ResultType)
+        {
+            case ResultType.Success:
+            case ResultType.Cancelled:
+                _logger.LogInformation($"Completed Sync: {result.ResultType}");
+                break;
+            case ResultType.Error:
+                _logger.LogError($"Completed Sync: {result.ResultType}");
+                break;
+        }
+        
+        _logger.LogInformation($"Transfer Successes: {result.SuccessCount}");
+        _logger.LogInformation($"Transfer Cancelled: {result.CancelledCount}");
+        _logger.LogInformation($"Transfer Failures: {result.FailedCount}");
+
+        if (result.FailedCount > 0)
+        {
+            foreach (var fileSyncResult in result.Files)
+            {
+                if (fileSyncResult.Status == FileSyncStatus.Failed)
+                {
+                    _logger.LogError($"Failed Track: {fileSyncResult.Path}|{fileSyncResult.ErrorMessage}");
+                }
+            }
+        }
     }
 
     private void PollFolderPicker()
@@ -220,7 +275,7 @@ public class GuiAppRunner
 
             if (appState.Version <= 0 || appState.TargetPath == null || appState.SourcePath == null)
             {
-                Console.WriteLine("Loaded app state is malformed, reverting to default");
+                _logger.LogWarning("Loaded app state is malformed, reverting to default");
                 return new AppState();
             }
             
@@ -228,7 +283,7 @@ public class GuiAppRunner
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to load app state: {ex.Message}");
+            _logger.LogError($"Failed to load app state: {ex.Message}");
             return new AppState();
         }
     }
@@ -456,6 +511,23 @@ public class GuiAppRunner
         {
             ImGui.Spacing();
             ImGui.TextColored(_warningColor, "! Large library detected (auto-scan timed out >100ms). Click 'Calculate Diff' to perform full scan.");
+        }
+    }
+
+    private void DrawLogButton()
+    {
+        if (ImGui.Button("Open Log"))
+        {
+            var logFile = LogFileUtils.FindMostRecentLogFile(LogFileUtils.GetLogDirectory());
+            if (logFile != null)
+            {
+                if (!LogFileUtils.OpenFileInDefaultApp(logFile))
+                    _lastErrorMessage = "Failed to open log file.";
+            }
+            else
+            {
+                _lastErrorMessage = "No log files found.";
+            }
         }
     }
 

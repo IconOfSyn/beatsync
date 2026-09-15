@@ -1,4 +1,4 @@
-﻿using beatsync;
+using beatsync;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ZLogger;
@@ -38,7 +38,11 @@ static class Program
                 .AddZLoggerRollingFile(options =>
                 {
                     options.RollingInterval = RollingInterval.Infinite;
-                    options.FilePathSelector = (dt, index) => $"worklog-{dt:yyyy-MM-dd}_{index}.log";
+                    options.FilePathSelector = (dt, index) =>
+                    {
+                        string logDir = LogFileUtils.GetLogDirectory();
+                        return Path.Combine(logDir, $"worklog-{dt:yyyy-MM-dd}_{index}.log");
+                    };
                     options.RollingSizeKB = 1024 * 1024;
                     options.UsePlainTextFormatter(formatter =>
                     {

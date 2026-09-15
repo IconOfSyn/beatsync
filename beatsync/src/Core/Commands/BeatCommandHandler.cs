@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace beatsync;
 
 public class BeatCommandHandler
@@ -10,10 +12,16 @@ public class BeatCommandHandler
     private readonly Queue<BeatCommand> _commandQueue = new();
     private readonly Queue<BeatCommandResult> _resultQueue = new();
     private readonly List<Task<BeatCommandResult>> _pendingTasks = new();
+    private readonly ILogger<BeatCommandHandler>? _logger;
 
     private uint _nextCommandId = 1;
     private CancellationTokenSource? _activeOpCancelTokenSource;
     private bool _isManualCancel;
+
+    public BeatCommandHandler(ILogger<BeatCommandHandler>? logger = null)
+    {
+        _logger = logger;
+    }
 
     public uint Submit(BeatCommand command)
     {
@@ -42,6 +50,8 @@ public class BeatCommandHandler
         // Process queued commands
         while (_commandQueue.TryDequeue(out BeatCommand command))
         {
+            _logger?.LogInformation($"Processing Command: {command.Id}|{command.Type}");
+            
             switch (command.Type)
             {
                 case CommandType.CalculateDiff:
