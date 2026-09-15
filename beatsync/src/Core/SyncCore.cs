@@ -3,14 +3,17 @@ using System.IO.Enumeration;
 
 namespace beatsync;
 
-public static class SyncCore
+public class SyncCore
 {
     public const int MaxScanStreams = 12;
     public const int MaxTransferStreams = 6;
+    
     private const int DryRunJobDelayInMilliseconds = 80;
     private const int InitialFileCollectionCapacity = 4096;
+    private const int CopyBufferSize = 128 * 1024; // 128 KB buffer
+
     
-    public static async Task<DiffResult> BuildSyncListAsync(AppState appState, CancellationToken cancellationToken = default)
+    public static async Task<DiffResult> BuildDiffAsync(AppState appState, CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
         var resultType = ResultType.InProgress;
@@ -66,7 +69,155 @@ public static class SyncCore
             Elapsed = stopwatch.Elapsed,
         };
     }
+    
+     // Lol, SyncAsync...
+    public static async Task<SyncResult> SyncLibraryAsync(
+        AppState appState,
+        DiffResult diffResult,
+        IProgress<SyncProgressReport>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        int syncStreamCount = Math.Clamp(appState.TransferStreamCount, 1, MaxTransferStreams);
 
+        
+        var stopwatch = Stopwatch.StartNew();
+
+        var syncJobList = diffResult.Jobs;
+        var fileResults = new FileSyncResult[syncJobList.Count];
+        
+        int completedCount = 0;
+        long totalBytesToTransfer = diffResult.TotalDiffBytes;
+        long totalBytesTransferred = 0;
+
+        var parallelOptions = new ParallelOptions
+        {
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = syncStreamCount,
+        };
+
+        try
+        {
+            await Parallel.ForEachAsync(Enumerable.Range(0, syncJobList.Count), parallelOptions, async (index, ct) =>
+            {
+                var job = syncJobList[index];
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    fileResults[index] = new FileSyncResult(
+                        Path: job.SongPath,
+                        Started: DateTimeOffset.UtcNow,
+                        Completed: DateTimeOffset.UtcNow,
+                        Status: FileSyncStatus.Skipped
+                    );
+                    
+                    return;
+                }
+
+                var startTime = DateTimeOffset.UtcNow;
+
+                if (appState.IsDryRun)
+                {
+                    try
+                    {
+                        await Task.Delay(DryRunJobDelayInMilliseconds, ct);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        fileResults[index] = new FileSyncResult(
+                            Path: job.SongPath,
+                            Started: startTime,
+                            Completed: DateTimeOffset.UtcNow,
+                            Status: FileSyncStatus.Cancelled
+                        );
+                        return;
+                    }
+
+                    Interlocked.Add(ref totalBytesTransferred, job.FileSizeBytes);
+                    fileResults[index] = new FileSyncResult(
+                        Path: job.SongPath,
+                        Started: startTime,
+                        Completed: DateTimeOffset.UtcNow,
+                        Status: FileSyncStatus.Success
+                    );
+                }
+                else
+                {
+                    string sourceFullPath = Path.Combine(appState.SourcePath, job.SongPath);
+                    string targetFullPath = Path.Combine(appState.TargetPath, job.SongPath);
+
+                    var copyResult = await CopyFileAsync(
+                        sourceFullPath,
+                        targetFullPath,
+                        bytesRead => Interlocked.Add(ref totalBytesTransferred, bytesRead),
+                        ct);
+
+                    fileResults[index] = new FileSyncResult(
+                        Path: job.SongPath,
+                        Started: startTime,
+                        Completed: DateTimeOffset.UtcNow,
+                        Status: copyResult.Status,
+                        ErrorMessage: copyResult.ErrorMessage
+                    );
+                }
+
+                int completed = Interlocked.Increment(ref completedCount);
+
+                progress?.Report(new SyncProgressReport(
+                    completed,
+                    syncJobList.Count,
+                    job.SongPath,
+                    fileResults[index].Status,
+                    Interlocked.Read(ref totalBytesTransferred),
+                    totalBytesToTransfer
+                ));
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Expected cancellation - do not treat as an unhandled crash
+            Console.Write("Cancellation Complete");
+        }
+
+        stopwatch.Stop();
+
+        // Mark any unreached slots as Skipped
+        for (int i = 0; i < fileResults.Length; i++)
+        {
+            if (fileResults[i].Path is null)
+            {
+                fileResults[i] = new FileSyncResult(
+                    Path: syncJobList[i].SongPath,
+                    Started: DateTimeOffset.UtcNow,
+                    Completed: DateTimeOffset.UtcNow,
+                    Status: FileSyncStatus.Skipped
+                );
+            }
+        }
+
+        ResultType resultType;
+        if (cancellationToken.IsCancellationRequested)
+        {
+            resultType = ResultType.Cancelled;
+        }
+        else if (fileResults.Any(f => f.Status == FileSyncStatus.Failed))
+        {
+            resultType = ResultType.Error;
+        }
+        else
+        {
+            resultType = ResultType.Success;
+        }
+
+        return new SyncResult
+        {
+            ResultType = resultType,
+            Files = fileResults,
+            Elapsed = stopwatch.Elapsed
+        };
+    }
+
+    
+    // -------------------- Private Implementation -----------------------
     private static Task<List<SyncJob>> CreateSyncListTask(AppState appState, CancellationToken cancellationToken)
     {
         var createSyncListTask = Task.Run(() =>
@@ -430,153 +581,6 @@ public static class SyncCore
         return len;
     }
 
-    // Lol, SyncAsync...
-    public static async Task<SyncResult> SyncMusicAsync(
-        AppState appState,
-        DiffResult diffResult,
-        IProgress<SyncProgressReport>? progress = null,
-        CancellationToken cancellationToken = default)
-    {
-        int syncStreamCount = Math.Clamp(appState.TransferStreamCount, 1, MaxTransferStreams);
-
-        
-        var stopwatch = Stopwatch.StartNew();
-
-        var syncJobList = diffResult.Jobs;
-        var fileResults = new FileSyncResult[syncJobList.Count];
-        
-        int completedCount = 0;
-        long totalBytesToTransfer = diffResult.TotalDiffBytes;
-        long totalBytesTransferred = 0;
-
-        var parallelOptions = new ParallelOptions
-        {
-            CancellationToken = cancellationToken,
-            MaxDegreeOfParallelism = syncStreamCount,
-        };
-
-        try
-        {
-            await Parallel.ForEachAsync(Enumerable.Range(0, syncJobList.Count), parallelOptions, async (index, ct) =>
-            {
-                var job = syncJobList[index];
-
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    fileResults[index] = new FileSyncResult(
-                        Path: job.SongPath,
-                        Started: DateTimeOffset.UtcNow,
-                        Completed: DateTimeOffset.UtcNow,
-                        Status: FileSyncStatus.Skipped
-                    );
-                    
-                    return;
-                }
-
-                var startTime = DateTimeOffset.UtcNow;
-
-                if (appState.IsDryRun)
-                {
-                    try
-                    {
-                        await Task.Delay(DryRunJobDelayInMilliseconds, ct);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        fileResults[index] = new FileSyncResult(
-                            Path: job.SongPath,
-                            Started: startTime,
-                            Completed: DateTimeOffset.UtcNow,
-                            Status: FileSyncStatus.Cancelled
-                        );
-                        return;
-                    }
-
-                    Interlocked.Add(ref totalBytesTransferred, job.FileSizeBytes);
-                    fileResults[index] = new FileSyncResult(
-                        Path: job.SongPath,
-                        Started: startTime,
-                        Completed: DateTimeOffset.UtcNow,
-                        Status: FileSyncStatus.Success
-                    );
-                }
-                else
-                {
-                    string sourceFullPath = Path.Combine(appState.SourcePath, job.SongPath);
-                    string targetFullPath = Path.Combine(appState.TargetPath, job.SongPath);
-
-                    var copyResult = await CopyFileAsync(
-                        sourceFullPath,
-                        targetFullPath,
-                        bytesRead => Interlocked.Add(ref totalBytesTransferred, bytesRead),
-                        ct);
-
-                    fileResults[index] = new FileSyncResult(
-                        Path: job.SongPath,
-                        Started: startTime,
-                        Completed: DateTimeOffset.UtcNow,
-                        Status: copyResult.Status,
-                        ErrorMessage: copyResult.ErrorMessage
-                    );
-                }
-
-                int completed = Interlocked.Increment(ref completedCount);
-
-                progress?.Report(new SyncProgressReport(
-                    completed,
-                    syncJobList.Count,
-                    job.SongPath,
-                    fileResults[index].Status,
-                    Interlocked.Read(ref totalBytesTransferred),
-                    totalBytesToTransfer
-                ));
-            });
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Expected cancellation - do not treat as an unhandled crash
-            Console.Write("Cancellation Complete");
-        }
-
-        stopwatch.Stop();
-
-        // Mark any unreached slots as Skipped
-        for (int i = 0; i < fileResults.Length; i++)
-        {
-            if (fileResults[i].Path is null)
-            {
-                fileResults[i] = new FileSyncResult(
-                    Path: syncJobList[i].SongPath,
-                    Started: DateTimeOffset.UtcNow,
-                    Completed: DateTimeOffset.UtcNow,
-                    Status: FileSyncStatus.Skipped
-                );
-            }
-        }
-
-        ResultType resultType;
-        if (cancellationToken.IsCancellationRequested)
-        {
-            resultType = ResultType.Cancelled;
-        }
-        else if (fileResults.Any(f => f.Status == FileSyncStatus.Failed))
-        {
-            resultType = ResultType.Error;
-        }
-        else
-        {
-            resultType = ResultType.Success;
-        }
-
-        return new SyncResult
-        {
-            ResultType = resultType,
-            Files = fileResults,
-            Elapsed = stopwatch.Elapsed
-        };
-    }
-
-    private const int CopyBufferSize = 128 * 1024; // 128 KB buffer
 
     private static async Task<FileCopyResult> CopyFileAsync(
         string sourcePath,

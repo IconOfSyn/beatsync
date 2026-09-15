@@ -34,7 +34,7 @@ public partial class SyncLibrary : ICommand
 
         // Get diff list
         await console.Output.WriteLineAsync("Scanning libraries...");
-        var diffResult = await SyncCore.BuildSyncListAsync(appState, cancellationToken);
+        var diffResult = await SyncCore.BuildDiffAsync(appState, cancellationToken);
         if (diffResult.ResultType != ResultType.Success)
         {
             throw new CommandException($"Diff Failed: {diffResult.ErrorMessage}", 666);
@@ -52,7 +52,7 @@ public partial class SyncLibrary : ICommand
 
         // Sync library
         await using var progress = new ConsoleSyncProgress(console);
-        var syncResult = await SyncCore.SyncMusicAsync(appState, diffResult, progress, cancellationToken);
+        var syncResult = await SyncCore.SyncLibraryAsync(appState, diffResult, progress, cancellationToken);
 
         // Write result
         await console.Output.WriteLineAsync($"{syncResult.ResultType} in {syncResult.Elapsed:mm\\:ss\\.ff} | {syncResult.SuccessCount}/{syncResult.TotalCount} tracks synced | failed: {syncResult.FailedCount} | cancelled: {syncResult.CancelledCount}");

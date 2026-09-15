@@ -74,7 +74,7 @@ public class BeatCommandHandler
 
         var task = Task.Run(async () =>
         {
-            var diffResult = await SyncCore.BuildSyncListAsync(AppState, cts.Token);
+            var diffResult = await SyncCore.BuildDiffAsync(AppState, cts.Token);
             bool isTimedOut = timeoutMs > 0 && cts.IsCancellationRequested && !_isManualCancel;
 
             return new BeatCommandResult
@@ -109,7 +109,7 @@ public class BeatCommandHandler
 
             var task = Task.Run(async () =>
             {
-                var result = await SyncCore.SyncMusicAsync(AppState, command.DiffResult, progress, cancelToken);
+                var result = await SyncCore.SyncLibraryAsync(AppState, command.DiffResult, progress, cancelToken);
 
                 return new BeatCommandResult
                 {
